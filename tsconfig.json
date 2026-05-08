@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "preserve",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["shared/*"],
+      "@main/*": ["electron/main/*"],
+      "@/*": ["renderer/*"]
+    }
+  },
+  "include": [
+    "electron/**/*.ts",
+    "electron/**/*.tsx",
+    "renderer/**/*.ts",
+    "renderer/**/*.tsx",
+    "shared/**/*.ts"
+  ]
+}

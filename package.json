@@ -1,0 +1,146 @@
+{
+  "name": "dbferry",
+  "productName": "dbferry",
+  "version": "0.1.0",
+  "description": "Cross-database sync tool — MySQL ⇄ PostgreSQL desktop app for incremental and full table synchronization",
+  "keywords": [
+    "mysql",
+    "postgresql",
+    "postgres",
+    "database",
+    "sync",
+    "etl",
+    "replication",
+    "cross-database",
+    "incremental-sync",
+    "electron",
+    "macos"
+  ],
+  "homepage": "https://github.com/ocracy/dbferry",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ocracy/dbferry.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ocracy/dbferry/issues"
+  },
+  "main": "out/main/index.js",
+  "author": {
+    "name": "Kerem Bekman",
+    "email": "maatricscom@gmail.com"
+  },
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "build:mac": "electron-vite build && electron-builder --mac",
+    "build:mac:arm64": "electron-vite build && electron-builder --mac --arm64",
+    "build:mac:x64": "electron-vite build && electron-builder --mac --x64",
+    "build:linux": "electron-vite build && electron-builder --linux",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "@tanstack/react-table": "^8.20.5",
+    "better-sqlite3": "^11.5.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cronstrue": "^2.52.0",
+    "framer-motion": "^11.13.1",
+    "keytar": "^7.9.0",
+    "lucide-react": "^0.468.0",
+    "mysql2": "^3.11.5",
+    "nanoid": "^5.0.9",
+    "node-cron": "^3.0.3",
+    "p-limit": "^6.2.0",
+    "pg": "^8.13.1",
+    "pg-copy-streams": "^6.0.6",
+    "pg-cursor": "^2.12.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-hook-form": "^7.54.0",
+    "sonner": "^1.7.1",
+    "tailwind-merge": "^2.5.5",
+    "tailwindcss-animate": "^1.0.7",
+    "zod": "^3.24.1",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.2",
+    "@types/node-cron": "^3.0.11",
+    "@types/pg": "^8.11.10",
+    "@types/pg-copy-streams": "^1.2.5",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["better-sqlite3", "electron", "esbuild", "keytar"]
+  },
+  "build": {
+    "appId": "com.maatrics.dbferry",
+    "productName": "dbferry",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/*.node",
+      "node_modules/keytar/**/*",
+      "node_modules/better-sqlite3/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64", "x64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["arm64", "x64"]
+        }
+      ],
+      "darkModeSupport": true,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "extendInfo": {
+        "LSMinimumSystemVersion": "11.0",
+        "NSHighResolutionCapable": true
+      }
+    },
+    "dmg": {
+      "title": "${productName} ${version}",
+      "icon": "build/icon.icns",
+      "contents": [
+        { "x": 130, "y": 220, "type": "file" },
+        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Development",
+      "target": ["AppImage", "deb"]
+    }
+  }
+}

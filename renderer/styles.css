@@ -1,0 +1,71 @@
+@import url('https://rsms.me/inter/inter.css');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-app-region: no-drag;
+  background-image:
+    radial-gradient(at 0% 0%, hsla(255, 90%, 66%, 0.08) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, hsla(200, 90%, 60%, 0.05) 0px, transparent 50%);
+  background-attachment: fixed;
+}
+
+.titlebar {
+  -webkit-app-region: drag;
+}
+
+.titlebar button,
+.titlebar a,
+.titlebar input {
+  -webkit-app-region: no-drag;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(220, 12%, 22%);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(220, 12%, 30%);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+.glass {
+  background: linear-gradient(180deg, hsla(222, 18%, 14%, 0.85) 0%, hsla(222, 22%, 9%, 0.85) 100%);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid hsla(220, 12%, 22%, 0.6);
+}
+
+.shimmer-bar {
+  background: linear-gradient(
+    90deg,
+    hsla(255, 90%, 66%, 0.3) 0%,
+    hsla(255, 90%, 66%, 0.9) 50%,
+    hsla(255, 90%, 66%, 0.3) 100%
+  );
+  background-size: 200% 100%;
+}
