@@ -8,6 +8,7 @@ import type {
   DbAdapter,
   StreamRowsOpts
 } from './types'
+import { buildPostgresSsl } from './ssl'
 
 function pgEscapeCopyValue(v: unknown): string {
   if (v === null || v === undefined) return '\\N'
@@ -20,6 +21,30 @@ function pgEscapeCopyValue(v: unknown): string {
     return pgEscapeCopyText(json)
   }
   return pgEscapeCopyText(String(v))
+}
+
+function buildPgFullType(row: {
+  data_type: string
+  udt_name: string
+  character_maximum_length: number | null
+  numeric_precision: number | null
+  numeric_scale: number | null
+}): string {
+  const dt = row.data_type
+  if (dt === 'character varying' || dt === 'varchar') {
+    return row.character_maximum_length ? `varchar(${row.character_maximum_length})` : 'varchar'
+  }
+  if (dt === 'character' || dt === 'char') {
+    return row.character_maximum_length ? `char(${row.character_maximum_length})` : 'char'
+  }
+  if (dt === 'numeric' || dt === 'decimal') {
+    if (row.numeric_precision != null && row.numeric_scale != null)
+      return `numeric(${row.numeric_precision},${row.numeric_scale})`
+    return 'numeric'
+  }
+  if (dt === 'ARRAY') return `${row.udt_name.replace(/^_/, '')}[]`
+  if (dt === 'USER-DEFINED') return row.udt_name
+  return dt
 }
 
 function pgEscapeCopyText(s: string): string {
@@ -52,13 +77,25 @@ export class PostgresAdapter implements DbAdapter {
       user: config.user,
       password,
       database: config.database,
-      ssl: config.ssl ? { rejectUnauthorized: false } : undefined
+      ssl: buildPostgresSsl(config)
     })
     await this.client.connect()
   }
 
   async close(): Promise<void> {
-    if (this.client) await this.client.end()
+    if (this.client) {
+      try {
+        await this.client.end()
+      } catch {}
+    }
+  }
+
+  destroy(): void {
+    try {
+      const stream = (this.client as unknown as { connection?: { stream?: { destroy?: () => void } } })
+        .connection?.stream
+      stream?.destroy?.()
+    } catch {}
   }
 
   async ping(): Promise<{ serverVersion: string }> {
@@ -94,15 +131,55 @@ export class PostgresAdapter implements DbAdapter {
     return r.rows.map((row) => ({ name: row.name, pkColumn: row.pk ?? null }))
   }
 
+  async addColumn(table: string, col: ColumnInfo): Promise<void> {
+    const typeSql = col.fullType || col.dataType
+    await this.client.query(
+      `ALTER TABLE ${this.identifier(table)} ADD COLUMN ${this.identifier(col.name)} ${typeSql}`
+    )
+  }
+
+  async dropColumn(table: string, columnName: string): Promise<void> {
+    await this.client.query(
+      `ALTER TABLE ${this.identifier(table)} DROP COLUMN ${this.identifier(columnName)}`
+    )
+  }
+
+  async countRows(table: string): Promise<number> {
+    const r = await this.client.query<{ c: string }>(
+      `SELECT COUNT(*)::text AS c FROM ${this.identifier(table)}`
+    )
+    return Number(r.rows[0]?.c ?? 0)
+  }
+
+  async countRowsAfterPk(
+    table: string,
+    pkColumn: string,
+    pkGreaterThan: string | number | bigint
+  ): Promise<number> {
+    const r = await this.client.query<{ c: string }>(
+      `SELECT COUNT(*)::text AS c FROM ${this.identifier(table)} WHERE ${this.identifier(pkColumn)} > $1`,
+      [pkGreaterThan]
+    )
+    return Number(r.rows[0]?.c ?? 0)
+  }
+
   async getColumns(table: string): Promise<ColumnInfo[]> {
     const r = await this.client.query<{
       name: string
       data_type: string
+      udt_name: string
+      character_maximum_length: number | null
+      numeric_precision: number | null
+      numeric_scale: number | null
       is_nullable: string
       is_pk: boolean
     }>(
       `SELECT c.column_name AS name,
               c.data_type AS data_type,
+              c.udt_name AS udt_name,
+              c.character_maximum_length,
+              c.numeric_precision,
+              c.numeric_scale,
               c.is_nullable AS is_nullable,
               EXISTS (
                 SELECT 1 FROM information_schema.table_constraints tc
@@ -121,6 +198,7 @@ export class PostgresAdapter implements DbAdapter {
     return r.rows.map((row) => ({
       name: row.name,
       dataType: row.data_type,
+      fullType: buildPgFullType(row),
       nullable: row.is_nullable === 'YES',
       isPrimaryKey: row.is_pk === true
     }))

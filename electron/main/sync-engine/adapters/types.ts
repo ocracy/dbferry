@@ -22,9 +22,14 @@ export interface StreamRowsOpts {
 export interface DbAdapter {
   connect(): Promise<void>
   close(): Promise<void>
+  destroy(): void
   ping(): Promise<{ serverVersion: string }>
   listTables(): Promise<string[]>
   listTablesMeta(): Promise<TableMeta[]>
+  countRows(table: string): Promise<number>
+  countRowsAfterPk(table: string, pkColumn: string, pkGreaterThan: string | number | bigint): Promise<number>
+  addColumn(table: string, col: ColumnInfo): Promise<void>
+  dropColumn(table: string, columnName: string): Promise<void>
   getColumns(table: string): Promise<ColumnInfo[]>
   getMaxPk(table: string, pkColumn: string): Promise<string | number | bigint | null>
   streamRows(table: string, opts: StreamRowsOpts): AsyncIterable<unknown[][]>

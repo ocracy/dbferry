@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { toast } from 'sonner'
+import { SslOptions } from './SslOptions'
 
 const defaultMysql: DbConfig = { type: 'mysql', host: '127.0.0.1', port: 3306, user: 'root', database: '' }
 const defaultPg: DbConfig = { type: 'postgres', host: '127.0.0.1', port: 5432, user: 'postgres', database: '' }
@@ -240,6 +241,8 @@ function ConnectionSection({
           />
         )}
       </Field>
+
+      <SslOptions cfg={cfg} onChange={onChange} />
 
       {status && (
         <div

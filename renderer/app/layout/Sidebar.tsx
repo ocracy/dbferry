@@ -1,6 +1,7 @@
 import { Database, History, Layers } from 'lucide-react'
 import { useRoute } from '@/stores/route'
 import { cn } from '@/lib/cn'
+import { ConsoleSidebarRow } from '@/app/components/ConsolePanel'
 
 import type { Route } from '@/stores/route'
 
@@ -60,8 +61,11 @@ export function Sidebar() {
           )
         })}
       </nav>
-      <div className="mt-auto p-4 text-[10.5px] text-text-muted/70 border-t border-line/40">
-        Drag a <span className="font-mono text-text-muted">.dbferry.json</span> file anywhere to import a project.
+      <div className="mt-auto">
+        <ConsoleSidebarRow />
+        <div className="p-4 text-[10.5px] text-text-muted/70 border-t border-line/40">
+          Drag a <span className="font-mono text-text-muted">.dbferry.json</span> file anywhere to import a project.
+        </div>
       </div>
     </aside>
   )

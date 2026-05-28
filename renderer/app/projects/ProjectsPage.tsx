@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { formatRelative } from '@/lib/format'
+import { cn } from '@/lib/cn'
 import { NewProjectDialog } from './NewProjectDialog'
 import { toast } from 'sonner'
 
@@ -85,9 +86,9 @@ export function ProjectsPage() {
                     <ChevronRight className="size-4 text-text-muted opacity-0 group-hover:opacity-100 transition-opacity mt-1" />
                   </div>
 
-                  <div className="flex items-center gap-2 text-xs text-text-muted mb-3">
+                  <div className="flex items-center gap-1.5 text-xs text-text-muted mb-3 min-w-0">
                     <DbChip cfg={p.source} />
-                    <span className="text-text-muted/40">→</span>
+                    <span className="text-text-muted/40 shrink-0">→</span>
                     <DbChip cfg={p.target} />
                   </div>
 
@@ -133,11 +134,11 @@ export function ProjectsPage() {
 
 function DbChip({ cfg }: { cfg: DbConfig }) {
   return (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-bg-panel/60 border border-line/40 font-mono text-[11px]">
-      <Database className="size-3" />
-      <span className={cfg.type === 'mysql' ? 'text-orange-400' : 'text-blue-400'}>{cfg.type}</span>
-      <span className="text-text-muted">·</span>
-      <span className="truncate max-w-[120px]">{cfg.database || cfg.host}</span>
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-bg-panel/60 border border-line/40 font-mono text-[11px] min-w-0 flex-1 overflow-hidden">
+      <Database className="size-3 shrink-0" />
+      <span className={cn('shrink-0', cfg.type === 'mysql' ? 'text-orange-400' : 'text-blue-400')}>{cfg.type}</span>
+      <span className="text-text-muted shrink-0">·</span>
+      <span className="truncate min-w-0">{cfg.database || cfg.host}</span>
     </span>
   )
 }

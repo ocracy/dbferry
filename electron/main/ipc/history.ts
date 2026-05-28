@@ -10,4 +10,5 @@ export function registerHistoryIpc(): void {
     tables: historyRepo.listTableRuns(runId)
   }))
   ipcMain.handle('history:clear', (_e, projectId?: string) => historyRepo.clear(projectId))
+  ipcMain.handle('history:logs', (_e, runId: string) => historyRepo.listLogs(runId))
 }

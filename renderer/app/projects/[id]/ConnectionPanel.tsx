@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { toast } from 'sonner'
+import { SslOptions } from '../SslOptions'
 
 interface Props {
   title: string
@@ -37,7 +38,18 @@ export function ConnectionPanel({
 
   useEffect(() => {
     setDraft(cfg)
-  }, [cfg.type, cfg.host, cfg.port, cfg.user, cfg.database])
+  }, [
+    cfg.type,
+    cfg.host,
+    cfg.port,
+    cfg.user,
+    cfg.database,
+    cfg.ssl,
+    cfg.sslCaPath,
+    cfg.sslCertPath,
+    cfg.sslKeyPath,
+    cfg.sslRejectUnauthorized
+  ])
 
   const test = async () => {
     setTesting(true)
@@ -151,6 +163,10 @@ export function ConnectionPanel({
             </button>
           </div>
         </div>
+      </div>
+
+      <div className="mt-3">
+        <SslOptions cfg={draft} onChange={commit} />
       </div>
 
       {status && (

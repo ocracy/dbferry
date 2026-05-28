@@ -1,7 +1,8 @@
-import { ipcMain } from 'electron'
+import { ipcMain, dialog, BrowserWindow } from 'electron'
 import type { ConnectionTestResult, DbConfig } from '@shared/types'
 import { MysqlAdapter } from '../sync-engine/adapters/mysql'
 import { PostgresAdapter } from '../sync-engine/adapters/postgres'
+import { buildMysqlSsl, buildPostgresSsl } from '../sync-engine/adapters/ssl'
 import { secrets } from '../secrets/keytar'
 import { projectsRepo } from '../storage/projects.repo'
 
@@ -39,7 +40,7 @@ async function listDatabases(cfg: DbConfig, password: string): Promise<string[]>
       port: cfg.port,
       user: cfg.user,
       password,
-      ssl: cfg.ssl ? {} : undefined
+      ssl: buildMysqlSsl(cfg)
     })
     try {
       const [rows] = await conn.query<any[]>('SHOW DATABASES')
@@ -59,7 +60,7 @@ async function listDatabases(cfg: DbConfig, password: string): Promise<string[]>
       user: cfg.user,
       password,
       database: cfg.database || 'postgres',
-      ssl: cfg.ssl ? { rejectUnauthorized: false } : undefined
+      ssl: buildPostgresSsl(cfg)
     })
     await client.connect()
     try {
@@ -76,6 +77,32 @@ async function listDatabases(cfg: DbConfig, password: string): Promise<string[]>
 }
 
 export function registerConnectionIpc(): void {
+  ipcMain.handle(
+    'connection:pickCertFile',
+    async (_e, payload: { title?: string } = {}) => {
+      const focused = BrowserWindow.getFocusedWindow()
+      const result = focused
+        ? await dialog.showOpenDialog(focused, {
+            title: payload.title ?? 'Select certificate file',
+            properties: ['openFile'],
+            filters: [
+              { name: 'Certificates', extensions: ['pem', 'crt', 'cer', 'key'] },
+              { name: 'All files', extensions: ['*'] }
+            ]
+          })
+        : await dialog.showOpenDialog({
+            title: payload.title ?? 'Select certificate file',
+            properties: ['openFile'],
+            filters: [
+              { name: 'Certificates', extensions: ['pem', 'crt', 'cer', 'key'] },
+              { name: 'All files', extensions: ['*'] }
+            ]
+          })
+      if (result.canceled || result.filePaths.length === 0) return null
+      return result.filePaths[0]
+    }
+  )
+
   ipcMain.handle(
     'connection:test',
     async (_e, payload: { config: DbConfig; password: string }) =>
@@ -118,6 +145,34 @@ export function registerConnectionIpc(): void {
           await adapter.close()
         } catch {}
       }
+    }
+  )
+
+  ipcMain.handle(
+    'connection:countRows',
+    async (_e, payload: { projectId: string; side: 'source' | 'target'; tables: string[] }) => {
+      const project = projectsRepo.get(payload.projectId)
+      if (!project) throw new Error('Project not found')
+      const password = await secrets.getPassword(payload.projectId, payload.side)
+      if (password === null) throw new Error('Password not set')
+      const cfg = payload.side === 'source' ? project.source : project.target
+      const adapter = build(cfg, password)
+      const out: Record<string, number> = {}
+      try {
+        await adapter.connect()
+        for (const t of payload.tables) {
+          try {
+            out[t] = await adapter.countRows(t)
+          } catch {
+            out[t] = -1
+          }
+        }
+      } finally {
+        try {
+          await adapter.close()
+        } catch {}
+      }
+      return out
     }
   )
 

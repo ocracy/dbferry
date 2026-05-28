@@ -19,6 +19,8 @@ interface TableConfigRow {
   table_name: string
   mode: string
   pk_column: string
+  add_column: number
+  drop_column: number
 }
 
 function rowToProject(row: ProjectRow, tables: TableConfig[]): Project {
@@ -40,13 +42,15 @@ function loadTables(projectId: string): TableConfig[] {
   const db = getDb()
   const rows = db
     .prepare<[string], TableConfigRow>(
-      'SELECT project_id, table_name, mode, pk_column FROM table_configs WHERE project_id = ? ORDER BY table_name'
+      'SELECT project_id, table_name, mode, pk_column, add_column, drop_column FROM table_configs WHERE project_id = ? ORDER BY table_name'
     )
     .all(projectId)
   return rows.map((r) => ({
     name: r.table_name,
     mode: r.mode as TableConfig['mode'],
-    pkColumn: r.pk_column
+    pkColumn: r.pk_column,
+    addColumn: Boolean(r.add_column),
+    dropColumn: Boolean(r.drop_column)
   }))
 }
 
@@ -128,9 +132,17 @@ export const projectsRepo = {
     const tx = db.transaction((rows: TableConfig[]) => {
       db.prepare('DELETE FROM table_configs WHERE project_id = ?').run(projectId)
       const ins = db.prepare(
-        'INSERT INTO table_configs (project_id, table_name, mode, pk_column) VALUES (?, ?, ?, ?)'
+        'INSERT INTO table_configs (project_id, table_name, mode, pk_column, add_column, drop_column) VALUES (?, ?, ?, ?, ?, ?)'
       )
-      for (const t of rows) ins.run(projectId, t.name, t.mode, t.pkColumn || 'id')
+      for (const t of rows)
+        ins.run(
+          projectId,
+          t.name,
+          t.mode,
+          t.pkColumn || 'id',
+          t.addColumn ? 1 : 0,
+          t.dropColumn ? 1 : 0
+        )
       db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(Date.now(), projectId)
     })
     tx(tables)
@@ -139,10 +151,21 @@ export const projectsRepo = {
   upsertTable(projectId: string, table: TableConfig): void {
     const db = getDb()
     db.prepare(
-      `INSERT INTO table_configs (project_id, table_name, mode, pk_column)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(project_id, table_name) DO UPDATE SET mode = excluded.mode, pk_column = excluded.pk_column`
-    ).run(projectId, table.name, table.mode, table.pkColumn || 'id')
+      `INSERT INTO table_configs (project_id, table_name, mode, pk_column, add_column, drop_column)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(project_id, table_name) DO UPDATE SET
+         mode = excluded.mode,
+         pk_column = excluded.pk_column,
+         add_column = excluded.add_column,
+         drop_column = excluded.drop_column`
+    ).run(
+      projectId,
+      table.name,
+      table.mode,
+      table.pkColumn || 'id',
+      table.addColumn ? 1 : 0,
+      table.dropColumn ? 1 : 0
+    )
     db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(Date.now(), projectId)
   }
 }

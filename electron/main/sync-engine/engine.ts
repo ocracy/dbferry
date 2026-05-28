@@ -20,6 +20,10 @@ interface RunHandle {
   abort: AbortController
   finished: Promise<void>
   runId: string
+  startedAt: number
+  projectId: string
+  emit: ProgressListener
+  done: boolean
 }
 
 const runningProjects = new Map<string, RunHandle>()
@@ -49,6 +53,21 @@ export function cancelProject(projectId: string): boolean {
   const h = runningProjects.get(projectId)
   if (!h) return false
   h.abort.abort()
+  // Immediately emit run-finished so UI doesn't wait for in-flight queries
+  // that may not unwind for seconds (mysql2's destroy() doesn't reject pending
+  // queries; we just orphan them). The engine's own emit becomes a no-op via
+  // the `done` flag.
+  if (!h.done) {
+    h.done = true
+    h.emit({
+      type: 'run-finished',
+      runId: h.runId,
+      status: 'cancelled',
+      durationMs: Date.now() - h.startedAt
+    })
+    historyRepo.finishRun(h.runId, 'cancelled', null)
+    runningProjects.delete(projectId)
+  }
   return true
 }
 
@@ -56,26 +75,61 @@ export interface RunSyncInput {
   project: Project
   trigger: RunTrigger
   emit: ProgressListener
+  // Optional one-shot list — overrides project.tables. Each entry pairs a
+  // table name with the mode to use just for this run.
+  tableOverrides?: Array<{ name: string; mode: SyncMode }>
 }
 
-export async function runSync({ project, trigger, emit }: RunSyncInput): Promise<{ runId: string }> {
+export async function runSync({ project, trigger, emit, tableOverrides }: RunSyncInput): Promise<{ runId: string }> {
   if (runningProjects.has(project.id)) {
     throw new Error('Project sync already running')
   }
-  const counts = syncableTables(project)
+  let tablesToSync: Array<{ name: string; mode: SyncMode; pkColumn: string; addColumn?: boolean; dropColumn?: boolean }>
+  let counts: { full: number; incremental: number; disabled: number }
+  if (tableOverrides && tableOverrides.length > 0) {
+    tablesToSync = tableOverrides
+      .filter((o) => o.mode !== 'disabled')
+      .map((o) => {
+        const cfg = project.tables.find((t) => t.name === o.name)
+        return {
+          name: o.name,
+          mode: o.mode,
+          pkColumn: cfg?.pkColumn || 'id',
+          addColumn: cfg?.addColumn,
+          dropColumn: cfg?.dropColumn
+        }
+      })
+    counts = {
+      full: tablesToSync.filter((t) => t.mode === 'full').length,
+      incremental: tablesToSync.filter((t) => t.mode === 'incremental').length,
+      disabled: 0
+    }
+  } else {
+    tablesToSync = project.tables.filter((t) => t.mode !== 'disabled')
+    counts = syncableTables(project)
+  }
   const runId = historyRepo.startRun(project.id, trigger, counts)
   const abort = new AbortController()
-  const tablesToSync = project.tables.filter((t) => t.mode !== 'disabled')
 
-  emit({
+  const startedAt = Date.now()
+  const handleRef: { value: RunHandle | null } = { value: null }
+  const safeEmit: ProgressListener = (e) => {
+    // Persist log events for later retrieval via History.
+    if (e.type === 'log') {
+      try {
+        historyRepo.appendLog(runId, e.level, e.message)
+      } catch {}
+    }
+    if (handleRef.value?.done) return
+    emit(e)
+  }
+
+  safeEmit({
     type: 'run-started',
     runId,
     projectId: project.id,
     totalTables: tablesToSync.length
   })
-
-  const startedAt = Date.now()
-
   const finished = (async () => {
     let runStatus: SyncStatus = 'success'
     let errorSummary: string | null = null
@@ -109,7 +163,7 @@ export async function runSync({ project, trigger, emit }: RunSyncInput): Promise
             return
           }
           const myIndex = ++index
-          emit({
+          safeEmit({
             type: 'table-started',
             runId,
             tableName: tableCfg.name,
@@ -126,9 +180,11 @@ export async function runSync({ project, trigger, emit }: RunSyncInput): Promise
               tableName: tableCfg.name,
               mode: tableCfg.mode,
               pkColumn: tableCfg.pkColumn || 'id',
+              addColumn: !!tableCfg.addColumn,
+              dropColumn: !!tableCfg.dropColumn,
               cancelSignal: abort.signal,
               onRows: (delta, rps) => {
-                emit({
+                safeEmit({
                   type: 'table-progress',
                   runId,
                   tableName: tableCfg.name,
@@ -136,7 +192,15 @@ export async function runSync({ project, trigger, emit }: RunSyncInput): Promise
                   rowsPerSec: rps
                 })
               },
-              log: (level, message) => emit({ type: 'log', runId, level, message })
+              onTotal: (total) => {
+                safeEmit({
+                  type: 'table-total',
+                  runId,
+                  tableName: tableCfg.name,
+                  total
+                })
+              },
+              log: (level, message) => safeEmit({ type: 'log', runId, level, message })
             })
             const dur = Date.now() - tableStart
             historyRepo.upsertTableRun({
@@ -148,7 +212,7 @@ export async function runSync({ project, trigger, emit }: RunSyncInput): Promise
               status: 'success',
               error: null
             })
-            emit({
+            safeEmit({
               type: 'table-finished',
               runId,
               tableName: tableCfg.name,
@@ -161,6 +225,14 @@ export async function runSync({ project, trigger, emit }: RunSyncInput): Promise
             const msg = err instanceof Error ? err.message : String(err)
             const dur = Date.now() - tableStart
             const isCancel = abort.signal.aborted || msg === 'cancelled'
+            if (!isCancel) {
+              safeEmit({
+                type: 'log',
+                runId,
+                level: 'error',
+                message: `[${tableCfg.name}] FAILED after ${dur}ms: ${msg}`
+              })
+            }
             historyRepo.upsertTableRun({
               runId,
               tableName: tableCfg.name,
@@ -170,7 +242,7 @@ export async function runSync({ project, trigger, emit }: RunSyncInput): Promise
               status: isCancel ? 'cancelled' : 'failed',
               error: isCancel ? null : msg
             })
-            emit({
+            safeEmit({
               type: 'table-finished',
               runId,
               tableName: tableCfg.name,
@@ -192,16 +264,29 @@ export async function runSync({ project, trigger, emit }: RunSyncInput): Promise
     } catch (err) {
       runStatus = 'failed'
       errorSummary = err instanceof Error ? err.message : String(err)
-      emit({ type: 'log', runId, level: 'error', message: errorSummary })
+      safeEmit({ type: 'log', runId, level: 'error', message: errorSummary })
     } finally {
-      historyRepo.finishRun(runId, runStatus, errorSummary)
-      const dur = Date.now() - startedAt
-      emit({ type: 'run-finished', runId, status: runStatus, durationMs: dur })
-      runningProjects.delete(project.id)
+      if (handleRef.value && !handleRef.value.done) {
+        handleRef.value.done = true
+        historyRepo.finishRun(runId, runStatus, errorSummary)
+        const dur = Date.now() - startedAt
+        emit({ type: 'run-finished', runId, status: runStatus, durationMs: dur })
+        runningProjects.delete(project.id)
+      }
     }
   })()
 
-  runningProjects.set(project.id, { abort, finished, runId })
+  const handle: RunHandle = {
+    abort,
+    finished,
+    runId,
+    startedAt,
+    projectId: project.id,
+    emit,
+    done: false
+  }
+  handleRef.value = handle
+  runningProjects.set(project.id, handle)
   return { runId }
 }
 
@@ -212,18 +297,22 @@ interface SyncTableInput {
   tableName: string
   mode: SyncMode
   pkColumn: string
+  addColumn: boolean
+  dropColumn: boolean
   cancelSignal: AbortSignal
   onRows: (delta: number, rowsPerSec: number) => void
+  onTotal: (total: number) => void
   log: (level: 'info' | 'warn' | 'error', message: string) => void
 }
 
 const BATCH_SIZE = 5000
 
 async function syncTable(input: SyncTableInput): Promise<number> {
-  const { project, srcPwd, tgtPwd, tableName, mode, pkColumn, cancelSignal, onRows, log } = input
+  const { project, srcPwd, tgtPwd, tableName, mode, pkColumn, addColumn, dropColumn, cancelSignal, onRows, onTotal, log } = input
   const src = adapterFor(project.source.type, { config: project.source, password: srcPwd })
   const tgt = adapterFor(project.target.type, { config: project.target, password: tgtPwd })
 
+  log('info', `[${tableName}] connecting source/target`)
   await src.connect()
   try {
     await tgt.connect()
@@ -232,20 +321,75 @@ async function syncTable(input: SyncTableInput): Promise<number> {
     throw err
   }
 
+  const onAbort = () => {
+    src.destroy()
+    tgt.destroy()
+  }
+  if (cancelSignal.aborted) onAbort()
+  else cancelSignal.addEventListener('abort', onAbort, { once: true })
+
   let txOpen = false
   try {
+    log('info', `[${tableName}] reading column metadata`)
     const [srcCols, tgtCols] = await Promise.all([src.getColumns(tableName), tgt.getColumns(tableName)])
     if (tgtCols.length === 0) {
       throw new Error(`Target table "${tableName}" not found or has no columns.`)
     }
-    const { matched, missingInTarget, missingInSource } = intersectColumns(srcCols, tgtCols)
+    let { matched, missingInTarget, missingInSource } = intersectColumns(srcCols, tgtCols)
+    if (matched.length === 0 && !addColumn) {
+      throw new Error(`No matching columns between source and target for "${tableName}".`)
+    }
+
+    // DDL: same-driver only (cross-driver type translation not supported yet).
+    const sameDriver = project.source.type === project.target.type
+    if (addColumn && missingInTarget.length) {
+      if (!sameDriver) {
+        log('warn', `[${tableName}] add-column skipped: cross-driver DDL not supported`)
+      } else {
+        for (const colName of missingInTarget) {
+          const srcCol = srcCols.find((c) => c.name === colName)
+          if (!srcCol) continue
+          try {
+            await tgt.addColumn(tableName, srcCol)
+            log('info', `[${tableName}] + column ${colName} ${srcCol.dataType}`)
+          } catch (err) {
+            log('error', `[${tableName}] add column ${colName} failed: ${err instanceof Error ? err.message : String(err)}`)
+          }
+        }
+        // Refresh after DDL
+        const newTgtCols = await tgt.getColumns(tableName)
+        const recompute = intersectColumns(srcCols, newTgtCols)
+        matched = recompute.matched
+        missingInTarget = recompute.missingInTarget
+        missingInSource = recompute.missingInSource
+      }
+    }
+    if (dropColumn && missingInSource.length) {
+      if (!sameDriver) {
+        log('warn', `[${tableName}] drop-column skipped: cross-driver DDL not supported`)
+      } else {
+        for (const colName of missingInSource) {
+          try {
+            await tgt.dropColumn(tableName, colName)
+            log('info', `[${tableName}] - column ${colName}`)
+          } catch (err) {
+            log('error', `[${tableName}] drop column ${colName} failed: ${err instanceof Error ? err.message : String(err)}`)
+          }
+        }
+        const newTgtCols = await tgt.getColumns(tableName)
+        const recompute = intersectColumns(srcCols, newTgtCols)
+        matched = recompute.matched
+        missingInTarget = recompute.missingInTarget
+        missingInSource = recompute.missingInSource
+      }
+    }
     if (matched.length === 0) {
       throw new Error(`No matching columns between source and target for "${tableName}".`)
     }
     if (missingInTarget.length) {
       log('warn', `[${tableName}] columns missing in target (skipped): ${missingInTarget.join(', ')}`)
     }
-    if (missingInSource.length) {
+    if (missingInSource.length && !dropColumn) {
       log('warn', `[${tableName}] columns missing in source (will be DEFAULT/NULL): ${missingInSource.join(', ')}`)
     }
 
@@ -253,8 +397,34 @@ async function syncTable(input: SyncTableInput): Promise<number> {
     if (mode === 'incremental') {
       const pkCol = matched.find((m) => m.src.name === pkColumn) ?? matched.find((m) => m.src.isPrimaryKey)
       if (!pkCol) throw new Error(`Incremental sync requires PK column "${pkColumn}" present in both source and target.`)
+      const pkType = pkCol.src.dataType.toLowerCase()
+      const isIntegerLike = /int|serial|long/.test(pkType) || pkType === 'bigint' || pkType === 'integer'
+      if (!isIntegerLike) {
+        log(
+          'warn',
+          `[${tableName}] incremental on non-integer PK ${pkCol.src.name} (${pkType}) — incremental may re-copy rows or miss new ones. Consider "full" mode for this table.`
+        )
+      }
       pkGreaterThan = await tgt.getMaxPk(tableName, pkCol.tgt.name)
-      log('info', `[${tableName}] incremental: target max(${pkColumn})=${pkGreaterThan ?? 'null'}`)
+      if (pkGreaterThan == null) {
+        log('warn', `[${tableName}] incremental: target is empty, will copy ALL source rows on this run`)
+      } else {
+        log('info', `[${tableName}] incremental from pk(${pkColumn}) > ${pkGreaterThan}`)
+      }
+    } else if (mode === 'full') {
+      log('info', `[${tableName}] full mode — will TRUNCATE target then copy`)
+    }
+
+    // Pre-count source rows so the UI can show % progress for long tables.
+    try {
+      const total =
+        mode === 'incremental' && pkGreaterThan != null
+          ? await src.countRowsAfterPk(tableName, pkColumn, pkGreaterThan as string | number | bigint)
+          : await src.countRows(tableName)
+      onTotal(total)
+      log('info', `[${tableName}] will copy up to ${total.toLocaleString()} rows`)
+    } catch (err) {
+      log('warn', `[${tableName}] could not pre-count rows: ${err instanceof Error ? err.message : String(err)}`)
     }
 
     await tgt.setConstraintsDisabled(true)
@@ -302,6 +472,7 @@ async function syncTable(input: SyncTableInput): Promise<number> {
     let lastTotal = 0
     let runningTotal = 0
 
+    log('info', `[${tableName}] streaming rows (batch=${BATCH_SIZE})`)
     const total = await tgt.bulkWrite(tableName, coercedIter, {
       columns: tgtCoercedCols,
       cancelSignal,
@@ -318,8 +489,10 @@ async function syncTable(input: SyncTableInput): Promise<number> {
     })
     onRows(runningTotal, 0)
 
+    log('info', `[${tableName}] committing (${total.toLocaleString()} rows)`)
     await tgt.commit()
     txOpen = false
+    log('info', `[${tableName}] done in ${Date.now() - start}ms`)
     return total
   } catch (err) {
     if (txOpen) {
@@ -329,10 +502,14 @@ async function syncTable(input: SyncTableInput): Promise<number> {
     }
     throw err
   } finally {
+    cancelSignal.removeEventListener('abort', onAbort)
     try {
       await tgt.setConstraintsDisabled(false)
     } catch {}
-    await src.close().catch(() => {})
-    await tgt.close().catch(() => {})
+    // Use destroy() instead of close() — graceful end() can hang on some
+    // mysql2/pg builds when the server has nothing to acknowledge, leaving
+    // the entire run waiting for the last table.
+    src.destroy()
+    tgt.destroy()
   }
 }

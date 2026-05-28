@@ -31,6 +31,10 @@ export function SyncStickyBar() {
 
   const totalRows = Object.values(active.tables).reduce((s, t) => s + t.rowsCopied, 0)
   const elapsed = (active.finishedAt ?? Date.now()) - active.startedAt
+  const etaMs =
+    active.status === 'running' && active.finishedTables > 0
+      ? Math.round((elapsed / active.finishedTables) * (active.totalTables - active.finishedTables))
+      : null
 
   return (
     <AnimatePresence>
@@ -57,13 +61,53 @@ export function SyncStickyBar() {
             <div className="flex items-center justify-between mb-1.5">
               <div className="text-[13px] font-medium truncate">
                 {active.status === 'running' ? (
-                  <>
-                    Syncing{' '}
-                    <span className="font-mono text-accent">{active.currentTableName ?? '…'}</span>{' '}
-                    <span className="text-text-muted">
-                      ({active.currentTableIndex}/{active.totalTables})
-                    </span>
-                  </>
+                  active.runningTables.length > 1 ? (
+                    <>
+                      Syncing{' '}
+                      <span className="text-accent">{active.runningTables.length} tables</span>{' '}
+                      <span className="text-text-muted">
+                        · {active.finishedTables}/{active.totalTables} done
+                      </span>
+                      {active.currentTableName && (
+                        <span className="text-text-muted">
+                          {' · '}
+                          <span className="font-mono text-text">{active.currentTableName}</span>
+                          {(() => {
+                            const t = active.tables[active.currentTableName]
+                            if (t?.total != null && t.total > 0) {
+                              const pct = Math.min(100, Math.round((t.rowsCopied / t.total) * 100))
+                              return <span> ({pct}%)</span>
+                            }
+                            return null
+                          })()}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      Syncing{' '}
+                      <span className="font-mono text-accent">
+                        {active.currentTableName ?? active.runningTables[0] ?? '…'}
+                      </span>{' '}
+                      <span className="text-text-muted">
+                        ({active.finishedTables + 1}/{active.totalTables})
+                      </span>
+                      {(() => {
+                        const name = active.currentTableName ?? active.runningTables[0]
+                        const t = name ? active.tables[name] : undefined
+                        if (t?.total != null && t.total > 0) {
+                          const pct = Math.min(100, Math.round((t.rowsCopied / t.total) * 100))
+                          return (
+                            <span className="text-text-muted">
+                              {' · '}
+                              {t.rowsCopied.toLocaleString()}/{t.total.toLocaleString()} ({pct}%)
+                            </span>
+                          )
+                        }
+                        return null
+                      })()}
+                    </>
+                  )
                 ) : (
                   <>
                     Sync {active.status} ·{' '}
@@ -75,6 +119,12 @@ export function SyncStickyBar() {
               </div>
               <div className="text-[11px] text-text-muted font-mono ml-3 shrink-0">
                 {formatNumber(totalRows)} rows · {formatDuration(elapsed)}
+                {etaMs != null && etaMs > 0 && (
+                  <>
+                    {' · '}
+                    <span className="text-accent">~{formatDuration(etaMs)} left</span>
+                  </>
+                )}
               </div>
             </div>
             <div className="h-1 bg-bg-panel rounded-full overflow-hidden">
@@ -100,7 +150,7 @@ export function SyncStickyBar() {
               onClick={() => api.sync.cancel(active.projectId)}
             >
               <X className="size-3.5" />
-              Cancel
+              Stop
             </Button>
           ) : (
             <Button variant="ghost" size="sm" onClick={reset}>

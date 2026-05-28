@@ -17,15 +17,28 @@ export function coerceValue(
 ): unknown {
   if (value === null || value === undefined) return null
 
+  const tgtType = norm(targetCol.dataType)
+
+  // JSON/JSONB target — always serialize objects/arrays. Driver auto-parsers
+  // (mysql2, pg) hand back parsed objects which would otherwise be passed to
+  // mysql2 as parameter and serialized as a SET-style key=value clause.
+  if (tgtType === 'jsonb' || tgtType === 'json') {
+    if (typeof value === 'string') return value
+    if (Buffer.isBuffer(value)) return value.toString('utf8')
+    return JSON.stringify(value)
+  }
+
   if (source === target) {
     if (source === 'mysql' && (looksLikeBoolText(sourceCol.dataType) || looksLikeBoolText(targetCol.dataType))) {
       if (typeof value === 'number') return value === 1
     }
+    // Same-driver fallback: object/array values for non-JSON columns also need
+    // serialization so mysql2 doesn't render them as `k = v` pairs.
+    if (target === 'mysql' && (typeof value === 'object' && !(value instanceof Date) && !Buffer.isBuffer(value))) {
+      return JSON.stringify(value)
+    }
     return value
   }
-
-  // Cross-DB
-  const tgtType = norm(targetCol.dataType)
 
   // Boolean handling
   if (tgtType === 'boolean' || tgtType === 'bool') {
@@ -42,12 +55,6 @@ export function coerceValue(
   if (tgtType === 'timestamp' || tgtType === 'timestamp without time zone' || tgtType === 'timestamp with time zone' || tgtType === 'datetime') {
     if (value instanceof Date) return value.toISOString().replace('T', ' ').replace('Z', '')
     if (typeof value === 'string') return value
-  }
-
-  // JSON / JSONB
-  if (tgtType === 'jsonb' || tgtType === 'json') {
-    if (typeof value === 'string') return value
-    return JSON.stringify(value)
   }
 
   // Arrays

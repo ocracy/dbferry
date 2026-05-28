@@ -6,8 +6,24 @@ import type {
   DbAdapter,
   StreamRowsOpts
 } from './types'
+import { buildMysqlSsl } from './ssl'
 
-const WRITE_CHUNK = 1000
+const WRITE_CHUNK = 500
+// Stay well under MySQL server's default max_allowed_packet (which can be as
+// low as 4 MiB on shared hosts). 4 MiB target keeps us safe across most setups.
+const MAX_PACKET_BYTES = 4 * 1024 * 1024
+
+function estimateRowBytes(row: unknown[]): number {
+  let n = 4 // overhead per row
+  for (const v of row) {
+    if (v == null) n += 4
+    else if (typeof v === 'string') n += v.length + 4
+    else if (typeof v === 'number' || typeof v === 'bigint' || typeof v === 'boolean') n += 16
+    else if (Buffer.isBuffer(v)) n += v.length + 4
+    else n += String(v).length + 4
+  }
+  return n
+}
 
 export class MysqlAdapter implements DbAdapter {
   private conn!: mysql.Connection
@@ -25,17 +41,30 @@ export class MysqlAdapter implements DbAdapter {
       user: config.user,
       password,
       database: config.database,
-      ssl: config.ssl ? {} : undefined,
+      ssl: buildMysqlSsl(config),
       multipleStatements: false,
       dateStrings: true,
       timezone: 'Z',
       supportBigNumbers: true,
-      bigNumberStrings: true
+      bigNumberStrings: true,
+      // Allow large packets (bulk INSERTs of rows with big JSON/BLOB).
+      // Cast to any: mysql2 supports this option but its type defs lag.
+      ...({ maxAllowedPacket: 256 * 1024 * 1024 } as Record<string, unknown>)
     })
   }
 
   async close(): Promise<void> {
-    if (this.conn) await this.conn.end()
+    if (this.conn) {
+      try {
+        await this.conn.end()
+      } catch {}
+    }
+  }
+
+  destroy(): void {
+    try {
+      if (this.conn) (this.conn as unknown as { destroy?: () => void }).destroy?.()
+    } catch {}
   }
 
   async ping(): Promise<{ serverVersion: string }> {
@@ -73,9 +102,43 @@ export class MysqlAdapter implements DbAdapter {
     }))
   }
 
+  async addColumn(table: string, col: ColumnInfo): Promise<void> {
+    // Always use fullType (e.g. `varchar(255)`) — DATA_TYPE alone is invalid for VARCHAR/etc.
+    // Always allow NULL on added columns to avoid backfill failures on existing rows.
+    const typeSql = col.fullType || col.dataType
+    await this.conn.query(
+      `ALTER TABLE ${this.identifier(table)} ADD COLUMN ${this.identifier(col.name)} ${typeSql} NULL`
+    )
+  }
+
+  async dropColumn(table: string, columnName: string): Promise<void> {
+    await this.conn.query(
+      `ALTER TABLE ${this.identifier(table)} DROP COLUMN ${this.identifier(columnName)}`
+    )
+  }
+
+  async countRows(table: string): Promise<number> {
+    const [rows] = await this.conn.query<mysql.RowDataPacket[]>(
+      `SELECT COUNT(*) AS c FROM ${this.identifier(table)}`
+    )
+    return Number(rows[0]?.c ?? 0)
+  }
+
+  async countRowsAfterPk(
+    table: string,
+    pkColumn: string,
+    pkGreaterThan: string | number | bigint
+  ): Promise<number> {
+    const [rows] = await this.conn.query<mysql.RowDataPacket[]>(
+      `SELECT COUNT(*) AS c FROM ${this.identifier(table)} WHERE ${this.identifier(pkColumn)} > ?`,
+      [pkGreaterThan]
+    )
+    return Number(rows[0]?.c ?? 0)
+  }
+
   async getColumns(table: string): Promise<ColumnInfo[]> {
     const [rows] = await this.conn.query<mysql.RowDataPacket[]>(
-      `SELECT COLUMN_NAME AS name, DATA_TYPE AS dataType, IS_NULLABLE AS nullable, COLUMN_KEY AS keyType
+      `SELECT COLUMN_NAME AS name, DATA_TYPE AS dataType, COLUMN_TYPE AS fullType, IS_NULLABLE AS nullable, COLUMN_KEY AS keyType
          FROM information_schema.COLUMNS
         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
         ORDER BY ORDINAL_POSITION`,
@@ -84,6 +147,7 @@ export class MysqlAdapter implements DbAdapter {
     return rows.map((r) => ({
       name: String(r.name),
       dataType: String(r.dataType),
+      fullType: r.fullType ? String(r.fullType) : undefined,
       nullable: r.nullable === 'YES',
       isPrimaryKey: r.keyType === 'PRI'
     }))
@@ -142,19 +206,57 @@ export class MysqlAdapter implements DbAdapter {
   ): Promise<number> {
     const colNames = opts.columns.map((c) => this.identifier(c.name)).join(', ')
     let total = 0
+
+    const flush = async (chunk: unknown[][]) => {
+      if (chunk.length === 0) return
+      const placeholders = chunk
+        .map(() => `(${opts.columns.map(() => '?').join(',')})`)
+        .join(',')
+      const flat: unknown[] = []
+      for (const row of chunk) for (const v of row) flat.push(v)
+      const sql = `INSERT IGNORE INTO ${this.identifier(table)} (${colNames}) VALUES ${placeholders}`
+      try {
+        await this.conn.query(sql, flat)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        // Retry one row at a time when bulk fails — surfaces the offending row
+        // and survives transient packet/size issues.
+        if (chunk.length > 1) {
+          for (const row of chunk) {
+            await this.conn.query(
+              `INSERT IGNORE INTO ${this.identifier(table)} (${colNames}) VALUES (${opts.columns.map(() => '?').join(',')})`,
+              row
+            )
+          }
+          return
+        }
+        throw new Error(`${msg} (chunk size=${chunk.length})`)
+      }
+    }
+
     for await (const batch of rowsBatches) {
       if (opts.cancelSignal?.aborted) throw new Error('cancelled')
-      for (let i = 0; i < batch.length; i += WRITE_CHUNK) {
-        const chunk = batch.slice(i, i + WRITE_CHUNK)
-        const placeholders = chunk
-          .map(() => `(${opts.columns.map(() => '?').join(',')})`)
-          .join(',')
-        const flat: unknown[] = []
-        for (const row of chunk) for (const v of row) flat.push(v)
-        const sql = `INSERT IGNORE INTO ${this.identifier(table)} (${colNames}) VALUES ${placeholders}`
-        await this.conn.query(sql, flat)
-        total += chunk.length
-        opts.onProgress?.(chunk.length)
+      let pending: unknown[][] = []
+      let pendingBytes = 0
+      for (const row of batch) {
+        const rowBytes = estimateRowBytes(row)
+        if (
+          pending.length > 0 &&
+          (pending.length >= WRITE_CHUNK || pendingBytes + rowBytes > MAX_PACKET_BYTES)
+        ) {
+          await flush(pending)
+          total += pending.length
+          opts.onProgress?.(pending.length)
+          pending = []
+          pendingBytes = 0
+        }
+        pending.push(row)
+        pendingBytes += rowBytes
+      }
+      if (pending.length > 0) {
+        await flush(pending)
+        total += pending.length
+        opts.onProgress?.(pending.length)
       }
     }
     return total

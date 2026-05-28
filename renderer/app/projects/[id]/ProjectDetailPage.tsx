@@ -71,7 +71,7 @@ export function ProjectDetailPage({ projectId }: { projectId: string }) {
 
   const cancelSync = async () => {
     await api.sync.cancel(project.id)
-    toast('Sync cancelled')
+    toast('Stopping sync…')
   }
 
   const exportJson = async () => {
@@ -88,8 +88,8 @@ export function ProjectDetailPage({ projectId }: { projectId: string }) {
 
   return (
     <>
-      <div className="px-8 pt-12 pb-32 max-w-7xl mx-auto">
-        <div className="flex items-center justify-between mb-8">
+      <div className="h-full flex flex-col px-8 pt-12 pb-6 max-w-7xl mx-auto w-full min-h-0">
+        <div className="flex items-center justify-between mb-5 shrink-0">
           <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
 
           <div className="flex items-center gap-2">
@@ -103,7 +103,7 @@ export function ProjectDetailPage({ projectId }: { projectId: string }) {
             {isRunning ? (
               <Button variant="danger" size="md" onClick={cancelSync}>
                 <Square className="size-4" />
-                Cancel
+                Stop
               </Button>
             ) : (
               <Button variant="primary" size="md" onClick={startSync} disabled={busy}>
@@ -114,18 +114,17 @@ export function ProjectDetailPage({ projectId }: { projectId: string }) {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2">
-            <TablesGrid project={project} onTablesChanged={refresh} disabled={isRunning} />
-          </div>
-          <div className="space-y-4">
-            <ScheduleSelector
-              project={project}
-              onChanged={(patch) =>
-                api.projects.update(project.id, patch).then((p) => p && setProject(p))
-              }
-            />
-          </div>
+        <div className="mb-4 shrink-0">
+          <ScheduleSelector
+            project={project}
+            onChanged={(patch) =>
+              api.projects.update(project.id, patch).then((p) => p && setProject(p))
+            }
+          />
+        </div>
+
+        <div className="flex-1 min-h-0 pb-24">
+          <TablesGrid project={project} onTablesChanged={refresh} disabled={isRunning} />
         </div>
       </div>
 
@@ -175,7 +174,10 @@ function SettingsDrawer({
   const [concurrency, setConcurrency] = useState(project.tableConcurrency)
 
   return (
-    <div className="fixed inset-0 z-50 flex">
+    <div
+      style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      className="fixed inset-0 z-50 flex"
+    >
       <div className="flex-1 bg-bg/60 backdrop-blur-sm" onClick={onClose} />
       <div className="w-[640px] max-w-[95vw] h-full bg-bg border-l border-line/40 overflow-y-auto">
         <div className="px-6 py-4 flex items-center justify-between border-b border-line/40 sticky top-0 bg-bg/95 backdrop-blur-md z-10">
@@ -183,7 +185,12 @@ function SettingsDrawer({
             <Settings className="size-4" />
             Settings · {project.name}
           </h3>
-          <button onClick={onClose} className="text-text-muted hover:text-text">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="size-8 grid place-items-center rounded-md text-text-muted hover:text-text hover:bg-bg-panel/60 transition-colors"
+          >
             <X className="size-4" />
           </button>
         </div>

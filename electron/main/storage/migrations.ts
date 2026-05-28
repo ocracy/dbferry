@@ -60,6 +60,23 @@ const MIGRATIONS: Array<{ id: number; sql: string }> = [
     sql: `
       ALTER TABLE sync_runs ADD COLUMN total_rows INTEGER NOT NULL DEFAULT 0;
     `
+  },
+  {
+    id: 3,
+    sql: `
+      ALTER TABLE table_configs ADD COLUMN add_column INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE table_configs ADD COLUMN drop_column INTEGER NOT NULL DEFAULT 0;
+
+      CREATE TABLE IF NOT EXISTS run_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL,
+        ts INTEGER NOT NULL,
+        level TEXT NOT NULL,
+        message TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES sync_runs(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_logs_run_ts ON run_logs(run_id, ts);
+    `
   }
 ]
 

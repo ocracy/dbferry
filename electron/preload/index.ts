@@ -4,6 +4,7 @@ import type {
   DbConfig,
   JsonProjectExport,
   Project,
+  RunLog,
   SyncProgressEvent,
   SyncRun,
   SyncTableRun,
@@ -48,17 +49,30 @@ const api = {
       ipcRenderer.invoke('connection:listTables', { projectId, side }),
     listTablesMeta: (projectId: string, side: 'source' | 'target'): Promise<TableMeta[]> =>
       ipcRenderer.invoke('connection:listTablesMeta', { projectId, side }),
+    countRows: (
+      projectId: string,
+      side: 'source' | 'target',
+      tables: string[]
+    ): Promise<Record<string, number>> =>
+      ipcRenderer.invoke('connection:countRows', { projectId, side, tables }),
     getMaxPk: (
       projectId: string,
       side: 'source' | 'target',
       table: string,
       pkColumn: string
     ): Promise<string | null> =>
-      ipcRenderer.invoke('connection:getMaxPk', { projectId, side, table, pkColumn })
+      ipcRenderer.invoke('connection:getMaxPk', { projectId, side, table, pkColumn }),
+    pickCertFile: (title?: string): Promise<string | null> =>
+      ipcRenderer.invoke('connection:pickCertFile', { title })
   },
   sync: {
     start: (projectId: string): Promise<{ runId: string }> =>
       ipcRenderer.invoke('sync:start', projectId),
+    startTables: (
+      projectId: string,
+      tables: Array<{ name: string; mode: 'incremental' | 'full' }>
+    ): Promise<{ runId: string }> =>
+      ipcRenderer.invoke('sync:startTables', { projectId, tables }),
     cancel: (projectId: string): Promise<boolean> => ipcRenderer.invoke('sync:cancel', projectId),
     isRunning: (projectId: string): Promise<boolean> =>
       ipcRenderer.invoke('sync:isRunning', projectId),
@@ -74,7 +88,8 @@ const api = {
     get: (runId: string): Promise<{ run: SyncRun | null; tables: SyncTableRun[] }> =>
       ipcRenderer.invoke('history:get', runId),
     clear: (projectId?: string): Promise<number> =>
-      ipcRenderer.invoke('history:clear', projectId)
+      ipcRenderer.invoke('history:clear', projectId),
+    logs: (runId: string): Promise<RunLog[]> => ipcRenderer.invoke('history:logs', runId)
   },
   files: {
     pathFor: (file: File): string => {
@@ -84,6 +99,18 @@ const api = {
         return ''
       }
     }
+  },
+  update: {
+    check: (): Promise<{
+      currentVersion: string
+      latestVersion: string | null
+      hasUpdate: boolean
+      releaseUrl: string | null
+      releaseName: string | null
+      publishedAt: string | null
+      error?: string
+    }> => ipcRenderer.invoke('update:check'),
+    open: (url: string): Promise<boolean> => ipcRenderer.invoke('update:open', url)
   }
 }
 

@@ -16,6 +16,20 @@ export function registerSyncIpc(getMainWindow: () => BrowserWindow | null): void
     return runSync({ project, trigger: 'manual', emit: emit as never })
   })
 
+  ipcMain.handle(
+    'sync:startTables',
+    async (_e, payload: { projectId: string; tables: Array<{ name: string; mode: 'incremental' | 'full' }> }) => {
+      const project = projectsRepo.get(payload.projectId)
+      if (!project) throw new Error('Project not found')
+      return runSync({
+        project,
+        trigger: 'manual',
+        emit: emit as never,
+        tableOverrides: payload.tables
+      })
+    }
+  )
+
   ipcMain.handle('sync:cancel', (_e, projectId: string) => cancelProject(projectId))
 
   ipcMain.handle('sync:isRunning', (_e, projectId: string) => isProjectRunning(projectId))

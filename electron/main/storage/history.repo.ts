@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid'
-import type { SyncRun, SyncTableRun, SyncStatus, RunTrigger } from '@shared/types'
+import type { SyncRun, SyncTableRun, SyncStatus, RunTrigger, RunLog } from '@shared/types'
 import { getDb } from './sqlite'
 
 const MAX_RUNS = 500
@@ -134,6 +134,26 @@ export const historyRepo = {
         SELECT id FROM sync_runs ORDER BY started_at DESC LIMIT ${MAX_RUNS}
       );
     `)
+  },
+
+  appendLog(runId: string, level: RunLog['level'], message: string): void {
+    const db = getDb()
+    db.prepare('INSERT INTO run_logs (run_id, ts, level, message) VALUES (?, ?, ?, ?)').run(
+      runId,
+      Date.now(),
+      level,
+      message
+    )
+  },
+
+  listLogs(runId: string, limit = 1000): RunLog[] {
+    const db = getDb()
+    const rows = db
+      .prepare<[string, number], { ts: number; level: string; message: string }>(
+        'SELECT ts, level, message FROM run_logs WHERE run_id = ? ORDER BY id ASC LIMIT ?'
+      )
+      .all(runId, limit)
+    return rows.map((r) => ({ ts: r.ts, level: r.level as RunLog['level'], message: r.message }))
   },
 
   clear(projectId?: string): number {

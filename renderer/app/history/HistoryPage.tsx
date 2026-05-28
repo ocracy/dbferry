@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, AlertTriangle, Square, Loader2, ChevronRight, Trash2 } from 'lucide-react'
-import type { Project, SyncRun, SyncTableRun } from '@shared/types'
+import { CheckCircle2, AlertTriangle, Square, Loader2, ChevronRight, Trash2, Terminal } from 'lucide-react'
+import type { Project, RunLog, SyncRun, SyncTableRun } from '@shared/types'
+import { cn } from '@/lib/cn'
 import { api } from '@/lib/api'
 import { Card } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
@@ -13,6 +14,8 @@ export function HistoryPage() {
   const [projects, setProjects] = useState<Map<string, Project>>(new Map())
   const [open, setOpen] = useState<string | null>(null)
   const [tables, setTables] = useState<SyncTableRun[]>([])
+  const [logs, setLogs] = useState<RunLog[]>([])
+  const [showLogs, setShowLogs] = useState(false)
 
   const refresh = () => {
     Promise.all([api.history.list(undefined, 100), api.projects.list()]).then(([h, ps]) => {
@@ -39,8 +42,13 @@ export function HistoryPage() {
       setOpen(null)
       return
     }
-    const detail = await api.history.get(runId)
+    setShowLogs(false)
+    const [detail, runLogs] = await Promise.all([
+      api.history.get(runId),
+      api.history.logs(runId)
+    ])
     setTables(detail.tables)
+    setLogs(runLogs)
     setOpen(runId)
   }
 
@@ -100,6 +108,44 @@ export function HistoryPage() {
                 <div className="border-t border-line/40 p-5 bg-bg-subtle/40">
                   {r.errorSummary && (
                     <div className="mb-3 text-xs text-danger">{r.errorSummary}</div>
+                  )}
+                  <div className="mb-3 flex items-center justify-end">
+                    <button
+                      onClick={() => setShowLogs((v) => !v)}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded-md border transition-colors',
+                        showLogs
+                          ? 'border-accent/40 bg-accent/10 text-accent'
+                          : 'border-line/40 text-text-muted hover:text-text'
+                      )}
+                    >
+                      <Terminal className="size-3" />
+                      {showLogs ? 'Hide logs' : `Show logs (${logs.length})`}
+                    </button>
+                  </div>
+                  {showLogs && (
+                    <div className="mb-4 rounded-lg border border-line/40 bg-bg/40 p-3 max-h-72 overflow-auto font-mono text-[11px] leading-relaxed">
+                      {logs.length === 0 ? (
+                        <div className="text-text-muted/60 italic">No logs recorded for this run.</div>
+                      ) : (
+                        logs.map((l, i) => (
+                          <div
+                            key={i}
+                            className={cn(
+                              'flex gap-2',
+                              l.level === 'error' && 'text-danger',
+                              l.level === 'warn' && 'text-warn',
+                              l.level === 'info' && 'text-text-muted'
+                            )}
+                          >
+                            <span className="opacity-50 shrink-0">
+                              {new Date(l.ts).toLocaleTimeString([], { hour12: false })}
+                            </span>
+                            <span className="break-all flex-1">{l.message}</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
                   )}
                   <table className="w-full text-sm">
                     <thead className="text-[10.5px] text-text-muted uppercase tracking-wider text-left">

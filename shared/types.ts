@@ -10,12 +10,24 @@ export interface DbConfig {
   user: string
   database: string
   ssl?: boolean
+  sslCaPath?: string
+  sslCertPath?: string
+  sslKeyPath?: string
+  sslRejectUnauthorized?: boolean
 }
 
 export interface TableConfig {
   name: string
   mode: SyncMode
   pkColumn: string
+  addColumn?: boolean
+  dropColumn?: boolean
+}
+
+export interface RunLog {
+  ts: number
+  level: 'info' | 'warn' | 'error'
+  message: string
 }
 
 export interface Project {
@@ -68,6 +80,7 @@ export interface SyncRun {
 export type SyncProgressEvent =
   | { type: 'run-started'; runId: string; projectId: string; totalTables: number }
   | { type: 'table-started'; runId: string; tableName: string; mode: SyncMode; index: number; total: number }
+  | { type: 'table-total'; runId: string; tableName: string; total: number }
   | { type: 'table-progress'; runId: string; tableName: string; rowsCopied: number; rowsPerSec: number }
   | { type: 'table-finished'; runId: string; tableName: string; rowsCopied: number; durationMs: number; status: SyncTableRun['status']; error?: string }
   | { type: 'run-finished'; runId: string; status: SyncStatus; durationMs: number }
@@ -83,6 +96,7 @@ export interface ConnectionTestResult {
 export interface ColumnInfo {
   name: string
   dataType: string
+  fullType?: string
   nullable: boolean
   isPrimaryKey: boolean
 }
