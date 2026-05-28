@@ -7,6 +7,7 @@ import type {
   StreamRowsOpts
 } from './types'
 import { buildMysqlSsl } from './ssl'
+import { sanitizeDbConfig } from './sanitize'
 
 const WRITE_CHUNK = 500
 // Stay well under MySQL server's default max_allowed_packet (which can be as
@@ -34,7 +35,8 @@ export class MysqlAdapter implements DbAdapter {
   }
 
   async connect(): Promise<void> {
-    const { config, password } = this.info
+    const { password } = this.info
+    const config = sanitizeDbConfig(this.info.config)
     this.conn = await mysql.createConnection({
       host: config.host,
       port: config.port,

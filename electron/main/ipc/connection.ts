@@ -3,6 +3,7 @@ import type { ConnectionTestResult, DbConfig } from '@shared/types'
 import { MysqlAdapter } from '../sync-engine/adapters/mysql'
 import { PostgresAdapter } from '../sync-engine/adapters/postgres'
 import { buildMysqlSsl, buildPostgresSsl } from '../sync-engine/adapters/ssl'
+import { sanitizeDbConfig } from '../sync-engine/adapters/sanitize'
 import { secrets } from '../secrets/keytar'
 import { projectsRepo } from '../storage/projects.repo'
 
@@ -32,7 +33,8 @@ async function testConnection(cfg: DbConfig, password: string): Promise<Connecti
   }
 }
 
-async function listDatabases(cfg: DbConfig, password: string): Promise<string[]> {
+async function listDatabases(rawCfg: DbConfig, password: string): Promise<string[]> {
+  const cfg = sanitizeDbConfig(rawCfg)
   if (cfg.type === 'mysql') {
     const mysql = await import('mysql2/promise')
     const conn = await mysql.createConnection({

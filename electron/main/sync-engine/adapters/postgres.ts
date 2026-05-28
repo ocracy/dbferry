@@ -9,6 +9,7 @@ import type {
   StreamRowsOpts
 } from './types'
 import { buildPostgresSsl } from './ssl'
+import { sanitizeDbConfig } from './sanitize'
 
 function pgEscapeCopyValue(v: unknown): string {
   if (v === null || v === undefined) return '\\N'
@@ -70,7 +71,8 @@ export class PostgresAdapter implements DbAdapter {
   }
 
   async connect(): Promise<void> {
-    const { config, password } = this.info
+    const { password } = this.info
+    const config = sanitizeDbConfig(this.info.config)
     this.client = new Client({
       host: config.host,
       port: config.port,
