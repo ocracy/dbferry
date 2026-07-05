@@ -105,3 +105,32 @@ export interface TableMeta {
   name: string
   pkColumn: string | null
 }
+
+export interface UpdateCheckResult {
+  currentVersion: string
+  latestVersion: string | null
+  hasUpdate: boolean
+  releaseUrl: string | null
+  releaseName: string | null
+  publishedAt: string | null
+  error?: string
+}
+
+export interface UpdateLogEvent {
+  level: 'info' | 'warn' | 'error'
+  message: string
+  ts: number
+}
+
+export interface UpdateProgressEvent {
+  received: number
+  total: number | null
+  percent: number | null
+}
+
+export interface UpdateDownloadResult {
+  ok: boolean
+  filePath: string | null
+  assetName: string | null
+  error?: string
+}

@@ -9,7 +9,11 @@ import type {
   SyncRun,
   SyncTableRun,
   TableConfig,
-  TableMeta
+  TableMeta,
+  UpdateCheckResult,
+  UpdateDownloadResult,
+  UpdateLogEvent,
+  UpdateProgressEvent
 } from '@shared/types'
 
 const api = {
@@ -101,16 +105,19 @@ const api = {
     }
   },
   update: {
-    check: (): Promise<{
-      currentVersion: string
-      latestVersion: string | null
-      hasUpdate: boolean
-      releaseUrl: string | null
-      releaseName: string | null
-      publishedAt: string | null
-      error?: string
-    }> => ipcRenderer.invoke('update:check'),
-    open: (url: string): Promise<boolean> => ipcRenderer.invoke('update:open', url)
+    check: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('update:check'),
+    open: (url: string): Promise<boolean> => ipcRenderer.invoke('update:open', url),
+    download: (): Promise<UpdateDownloadResult> => ipcRenderer.invoke('update:download'),
+    onLog: (cb: (e: UpdateLogEvent) => void) => {
+      const listener = (_: unknown, e: UpdateLogEvent) => cb(e)
+      ipcRenderer.on('update:log', listener)
+      return () => ipcRenderer.removeListener('update:log', listener)
+    },
+    onProgress: (cb: (e: UpdateProgressEvent) => void) => {
+      const listener = (_: unknown, e: UpdateProgressEvent) => cb(e)
+      ipcRenderer.on('update:progress', listener)
+      return () => ipcRenderer.removeListener('update:progress', listener)
+    }
   }
 }
 

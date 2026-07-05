@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { RefreshCw, Search, Loader2, AlertTriangle, Hash, X, Zap, Play } from 'lucide-react'
+import { RefreshCw, Search, Loader2, AlertTriangle, Hash, X, Zap, Play, Sparkles, Trash2, KeyRound, ChevronDown } from 'lucide-react'
 import type { Project, TableConfig, SyncMode } from '@shared/types'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
@@ -16,6 +16,14 @@ interface Props {
   disabled: boolean
 }
 
+interface TableDiff {
+  added: string[]
+  removed: string[]
+  pkChanged: { name: string; from: string; to: string }[]
+}
+
+type ModeFilter = 'all' | 'disabled' | 'incremental' | 'full' | 'new'
+
 export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
   const [loading, setLoading] = useState(false)
   const [countingAll, setCountingAll] = useState(false)
@@ -24,6 +32,10 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
   const [rowCounts, setRowCounts] = useState<Record<string, number>>({})
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [contextMenu, setContextMenu] = useState<{ table: TableConfig; x: number; y: number } | null>(null)
+  const [diff, setDiff] = useState<TableDiff | null>(null)
+  const [diffOpen, setDiffOpen] = useState(true)
+  const [newTables, setNewTables] = useState<Set<string>>(new Set())
+  const [modeFilter, setModeFilter] = useState<ModeFilter>('all')
   const active = useSync((s) => s.active)
   const tables = project.tables
 
@@ -32,19 +44,42 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
     try {
       const meta = await api.connection.listTablesMeta(project.id, 'source')
       const list = meta.map((m) => m.name)
+      // Snapshot of what dbferry knew before this refresh — used to compute the diff.
+      const prevNames = new Set(tables.map((t) => t.name))
+      const added: string[] = []
+      const pkChanged: TableDiff['pkChanged'] = []
       const merged: TableConfig[] = meta.map((m) => {
         const existing = tables.find((t) => t.name === m.name)
         if (!existing) {
+          added.push(m.name)
           return { name: m.name, mode: 'disabled', pkColumn: m.pkColumn ?? 'id' }
         }
         if (existing.pkColumn === 'id' && m.pkColumn && m.pkColumn !== 'id') {
+          pkChanged.push({ name: m.name, from: existing.pkColumn, to: m.pkColumn })
           return { ...existing, pkColumn: m.pkColumn }
         }
         return existing
       })
-      const removed = tables.filter((t) => !list.includes(t.name))
-      const final = [...merged, ...removed.filter((r) => r.mode !== 'disabled')]
+      const removedTables = tables.filter((t) => !list.includes(t.name))
+      const removed = removedTables.map((t) => t.name)
+      // Keep still-configured removed tables visible; drop the ones that were disabled anyway.
+      const final = [...merged, ...removedTables.filter((r) => r.mode !== 'disabled')]
       await api.projects.replaceTables(project.id, final)
+
+      const nextDiff: TableDiff = { added, removed, pkChanged }
+      const hasChanges = added.length > 0 || removed.length > 0 || pkChanged.length > 0
+      setDiff(hasChanges ? nextDiff : null)
+      setDiffOpen(true)
+      setNewTables(new Set(added))
+      if (hasChanges) {
+        const bits: string[] = []
+        if (added.length) bits.push(`${added.length} new`)
+        if (removed.length) bits.push(`${removed.length} removed`)
+        toast.success(`Schema changed · ${bits.join(' · ')}`)
+      } else if (prevNames.size > 0) {
+        toast.success('No table changes since last refresh')
+      }
+
       const noPk = meta.filter((m) => !m.pkColumn).map((m) => m.name)
       if (noPk.length) {
         toast.warning(
@@ -106,10 +141,15 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
   }
 
   const filtered = useMemo(() => {
-    if (!filter) return tables
-    const q = filter.toLowerCase()
-    return tables.filter((t) => t.name.toLowerCase().includes(q))
-  }, [tables, filter])
+    let list = tables
+    if (modeFilter === 'new') list = list.filter((t) => newTables.has(t.name))
+    else if (modeFilter !== 'all') list = list.filter((t) => t.mode === modeFilter)
+    if (filter) {
+      const q = filter.toLowerCase()
+      list = list.filter((t) => t.name.toLowerCase().includes(q))
+    }
+    return list
+  }, [tables, filter, modeFilter, newTables])
 
   // Bulk action targets selected rows; if none selected, falls back to all visible
   const targetNames = () =>
@@ -200,11 +240,46 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
   return (
     <div className="glass rounded-xl flex flex-col h-full min-h-0">
       <div className="px-5 py-3.5 flex items-center justify-between border-b border-line/40 shrink-0">
-        <div className="flex items-center gap-3">
-          <h3 className="font-semibold text-sm">Tables</h3>
-          <Badge tone="accent">{counts.incremental} incremental</Badge>
-          <Badge tone="warn">{counts.full} full</Badge>
-          <Badge tone="neutral">{counts.disabled} disabled</Badge>
+        <div className="flex items-center gap-2">
+          <h3 className="font-semibold text-sm mr-1">Tables</h3>
+          <FilterChip
+            label="all"
+            count={tables.length}
+            tone="neutral"
+            active={modeFilter === 'all'}
+            onClick={() => setModeFilter('all')}
+          />
+          <FilterChip
+            label="incremental"
+            count={counts.incremental}
+            tone="accent"
+            active={modeFilter === 'incremental'}
+            onClick={() => setModeFilter((f) => (f === 'incremental' ? 'all' : 'incremental'))}
+          />
+          <FilterChip
+            label="full"
+            count={counts.full}
+            tone="warn"
+            active={modeFilter === 'full'}
+            onClick={() => setModeFilter((f) => (f === 'full' ? 'all' : 'full'))}
+          />
+          <FilterChip
+            label="disabled"
+            count={counts.disabled}
+            tone="neutral"
+            active={modeFilter === 'disabled'}
+            onClick={() => setModeFilter((f) => (f === 'disabled' ? 'all' : 'disabled'))}
+          />
+          {newTables.size > 0 && (
+            <FilterChip
+              label="new"
+              count={newTables.size}
+              tone="success"
+              active={modeFilter === 'new'}
+              icon={<Sparkles className="size-3" />}
+              onClick={() => setModeFilter((f) => (f === 'new' ? 'all' : 'new'))}
+            />
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={countAll} disabled={countingAll || !tables.length}>
@@ -217,6 +292,19 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
           </Button>
         </div>
       </div>
+
+      {diff && (
+        <DiffBanner
+          diff={diff}
+          open={diffOpen}
+          onToggle={() => setDiffOpen((o) => !o)}
+          onClose={() => setDiff(null)}
+          onConfigureNew={() => {
+            setModeFilter('new')
+            setDiffOpen(false)
+          }}
+        />
+      )}
 
       {tables.length > 0 && (
         <div className="px-5 py-2.5 flex items-center gap-3 border-b border-line/40 shrink-0">
@@ -238,8 +326,18 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
             )}
           </div>
           <span className="text-[11px] text-text-muted">
-            {filterActive ? `${filtered.length}/${tables.length}` : `${tables.length} total`}
+            {filtered.length !== tables.length
+              ? `${filtered.length}/${tables.length}`
+              : `${tables.length} total`}
           </span>
+          {modeFilter !== 'all' && (
+            <button
+              onClick={() => setModeFilter('all')}
+              className="text-[11px] text-accent hover:underline"
+            >
+              show all
+            </button>
+          )}
           {selected.size > 0 && (
             <div className="ml-auto flex items-center gap-1.5 text-[11px]">
               <span className="text-accent font-medium">{selected.size} selected</span>
@@ -382,6 +480,13 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
                   toggleAddColumn={() => toggleAddColumn(t)}
                   toggleDropColumn={() => toggleDropColumn(t)}
                   runStatus={active?.tables[t.name]}
+                  flag={
+                    newTables.has(t.name)
+                      ? 'new'
+                      : diff?.removed.includes(t.name)
+                        ? 'removed'
+                        : undefined
+                  }
                   onContextMenu={(e) => {
                     e.preventDefault()
                     setContextMenu({ table: t, x: e.clientX, y: e.clientY })
@@ -391,7 +496,11 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
               {filtered.length === 0 && (
                 <tr>
                   <td colSpan={9} className="px-5 py-8 text-center text-text-muted text-sm">
-                    No tables match "{filter}"
+                    {filter
+                      ? `No tables match "${filter}"`
+                      : modeFilter === 'new'
+                        ? 'No new tables from the last refresh'
+                        : `No ${modeFilter} tables`}
                   </td>
                 </tr>
               )}
@@ -399,6 +508,166 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
           </table>
         </div>
       )}
+    </div>
+  )
+}
+
+function FilterChip({
+  label,
+  count,
+  tone,
+  active,
+  icon,
+  onClick
+}: {
+  label: string
+  count: number
+  tone: 'accent' | 'warn' | 'neutral' | 'success'
+  active: boolean
+  icon?: React.ReactNode
+  onClick: () => void
+}) {
+  const activeColor =
+    tone === 'accent'
+      ? 'bg-accent/20 text-accent border-accent/50'
+      : tone === 'warn'
+        ? 'bg-warn/20 text-warn border-warn/50'
+        : tone === 'success'
+          ? 'bg-success/20 text-success border-success/50'
+          : 'bg-text/10 text-text border-text-muted/50'
+  return (
+    <button
+      onClick={onClick}
+      title={`Filter: ${label}`}
+      className={cn(
+        'inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10.5px] font-medium uppercase tracking-wider transition-colors',
+        active
+          ? activeColor
+          : 'bg-bg-panel text-text-muted border-line/60 hover:border-text-muted/60'
+      )}
+    >
+      {icon}
+      {count} {label}
+    </button>
+  )
+}
+
+function DiffBanner({
+  diff,
+  open,
+  onToggle,
+  onClose,
+  onConfigureNew
+}: {
+  diff: TableDiff
+  open: boolean
+  onToggle: () => void
+  onClose: () => void
+  onConfigureNew: () => void
+}) {
+  const { added, removed, pkChanged } = diff
+  return (
+    <div className="mx-4 mt-3 rounded-lg border border-line/50 bg-bg-panel/40 shrink-0 overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2">
+        <button onClick={onToggle} className="text-text-muted hover:text-text">
+          <ChevronDown className={cn('size-4 transition-transform', !open && '-rotate-90')} />
+        </button>
+        <span className="text-xs font-semibold">Schema changes since last refresh</span>
+        <div className="flex items-center gap-1.5">
+          {added.length > 0 && (
+            <Badge tone="success">
+              <Sparkles className="size-2.5" /> {added.length} new
+            </Badge>
+          )}
+          {removed.length > 0 && (
+            <Badge tone="danger">
+              <Trash2 className="size-2.5" /> {removed.length} removed
+            </Badge>
+          )}
+          {pkChanged.length > 0 && (
+            <Badge tone="warn">
+              <KeyRound className="size-2.5" /> {pkChanged.length} pk
+            </Badge>
+          )}
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          {added.length > 0 && (
+            <button
+              onClick={onConfigureNew}
+              className="text-[11px] text-accent hover:underline"
+            >
+              Configure new
+            </button>
+          )}
+          <button onClick={onClose} title="Dismiss" className="text-text-muted hover:text-text">
+            <X className="size-3.5" />
+          </button>
+        </div>
+      </div>
+      {open && (
+        <div className="px-3 pb-3 pt-0 space-y-2 text-[11.5px]">
+          {added.length > 0 && (
+            <DiffRow
+              icon={<Sparkles className="size-3 text-success" />}
+              label="New on source (default disabled — enable to sync)"
+              names={added}
+              tone="success"
+            />
+          )}
+          {removed.length > 0 && (
+            <DiffRow
+              icon={<Trash2 className="size-3 text-danger" />}
+              label="Gone from source (won't sync anymore)"
+              names={removed}
+              tone="danger"
+            />
+          )}
+          {pkChanged.length > 0 && (
+            <DiffRow
+              icon={<KeyRound className="size-3 text-warn" />}
+              label="Primary key detected"
+              names={pkChanged.map((p) => `${p.name} (${p.from}→${p.to})`)}
+              tone="warn"
+            />
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DiffRow({
+  icon,
+  label,
+  names,
+  tone
+}: {
+  icon: React.ReactNode
+  label: string
+  names: string[]
+  tone: 'success' | 'danger' | 'warn'
+}) {
+  const color =
+    tone === 'success' ? 'text-success' : tone === 'danger' ? 'text-danger' : 'text-warn'
+  return (
+    <div className="flex gap-2">
+      <span className="shrink-0 flex items-center gap-1 pt-0.5">
+        {icon}
+        <span className={cn('font-medium', color)}>{names.length}</span>
+      </span>
+      <div className="min-w-0">
+        <div className="text-text-muted text-[10.5px] uppercase tracking-wide mb-0.5">{label}</div>
+        <div className="flex flex-wrap gap-1">
+          {names.map((n) => (
+            <span
+              key={n}
+              className="font-mono text-[11px] rounded bg-bg-panel/80 border border-line/50 px-1.5 py-px"
+            >
+              {n}
+            </span>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
@@ -486,6 +755,7 @@ function TableRow({
   toggleAddColumn,
   toggleDropColumn,
   runStatus,
+  flag,
   onContextMenu
 }: {
   table: TableConfig
@@ -498,18 +768,46 @@ function TableRow({
   toggleAddColumn: () => void
   toggleDropColumn: () => void
   runStatus?: { status: string; rowsCopied: number; rowsPerSec: number; total?: number; error?: string }
+  flag?: 'new' | 'removed'
   onContextMenu: (e: React.MouseEvent) => void
 }) {
   return (
-    <tr className={cn('border-b border-line/20 hover:bg-bg-panel/50 group', selected && 'bg-accent/5')}>
+    <tr
+      className={cn(
+        'border-b border-line/20 hover:bg-bg-panel/50 group',
+        selected && 'bg-accent/5',
+        flag === 'new' && 'bg-success/5',
+        flag === 'removed' && 'bg-danger/5'
+      )}
+    >
       <td className="pl-5 pr-2 py-2 text-center">
         <SelectBox checked={selected} onClick={onToggleSelected} />
       </td>
       <td
         onContextMenu={onContextMenu}
-        className="px-3 py-2 font-mono text-[12.5px] truncate max-w-[280px] cursor-context-menu"
+        className="px-3 py-2 font-mono text-[12.5px] cursor-context-menu"
       >
-        {table.name}
+        <span className="inline-flex items-center gap-1.5 max-w-[280px]">
+          <span className="truncate">{table.name}</span>
+          {flag === 'new' && (
+            <span
+              title="New table since last refresh"
+              className="shrink-0 inline-flex items-center gap-0.5 rounded px-1 py-px text-[9px] uppercase tracking-wide bg-success/15 text-success"
+            >
+              <Sparkles className="size-2.5" />
+              new
+            </span>
+          )}
+          {flag === 'removed' && (
+            <span
+              title="Gone from source — will no longer sync"
+              className="shrink-0 inline-flex items-center gap-0.5 rounded px-1 py-px text-[9px] uppercase tracking-wide bg-danger/15 text-danger"
+            >
+              <Trash2 className="size-2.5" />
+              removed
+            </span>
+          )}
+        </span>
       </td>
       <td className="px-3 py-2 text-right font-mono text-[12px]">
         <div className="inline-flex items-center gap-1.5">

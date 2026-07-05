@@ -9,3 +9,6 @@ release
 build/icon.iconset
 build/icon-source.svg
 *.dbferry.json
+
+# Heart launcher bundle (local only)
+heart.json

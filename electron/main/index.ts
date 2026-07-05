@@ -48,7 +48,7 @@ app.whenReady().then(() => {
   registerConnectionIpc()
   registerSyncIpc(() => mainWindow)
   registerHistoryIpc()
-  registerUpdateIpc()
+  registerUpdateIpc(() => mainWindow)
   createWindow()
   loadAllSchedules()
 
