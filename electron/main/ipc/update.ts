@@ -52,9 +52,14 @@ function pickAsset(assets: GithubAsset[], platform: NodeJS.Platform, arch: strin
   const find = (pred: (name: string) => boolean) =>
     assets.find((a) => pred(a.name.toLowerCase()))
   if (platform === 'darwin') {
+    // electron-builder names arm64 as "…-arm64.dmg" but x64 as plain "…-.dmg"
+    // (no arch marker), so match x64 by the *absence* of an arm marker.
+    const isArm = (n: string) => n.includes('arm64') || n.includes('aarch64')
     const wantArm = arch === 'arm64'
+    const archMatch = (n: string) => (wantArm ? isArm(n) : !isArm(n))
     return (
-      find((n) => n.endsWith('.dmg') && (wantArm ? n.includes('arm64') : n.includes('x64') || n.includes('x86_64'))) ||
+      find((n) => n.endsWith('.dmg') && archMatch(n)) ||
+      find((n) => n.endsWith('.zip') && archMatch(n)) ||
       find((n) => n.endsWith('.dmg'))
     )
   }
