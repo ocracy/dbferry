@@ -25,7 +25,7 @@ export function App() {
   return (
     <div className="h-screen w-screen flex bg-bg overflow-hidden">
       <div className="titlebar absolute top-0 left-0 right-0 h-9 z-40 pointer-events-none" />
-      <div className="absolute top-1.5 right-3 z-50 flex items-center gap-1.5">
+      <div className="no-drag absolute top-1.5 right-3 z-50 flex items-center gap-1.5">
         <UpdateButton />
       </div>
       <Sidebar />

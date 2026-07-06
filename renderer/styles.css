@@ -28,6 +28,12 @@ body {
   -webkit-app-region: drag;
 }
 
+/* Interactive controls overlaid on the draggable title bar must opt out of
+   the drag region, otherwise macOS eats their clicks for window dragging. */
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
 .titlebar button,
 .titlebar a,
 .titlebar input {
