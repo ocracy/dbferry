@@ -1,7 +1,7 @@
 {
   "name": "dbferry",
   "productName": "dbferry",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Cross-database sync tool — MySQL ⇄ PostgreSQL desktop app for incremental and full table synchronization",
   "keywords": [
     "mysql",
@@ -85,7 +85,12 @@
     "vite": "^5.4.11"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["better-sqlite3", "electron", "esbuild", "keytar"]
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "electron",
+      "esbuild",
+      "keytar"
+    ]
   },
   "build": {
     "appId": "com.maatrics.dbferry",
@@ -110,11 +115,17 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["arm64", "x64"]
+          "arch": [
+            "arm64",
+            "x64"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["arm64", "x64"]
+          "arch": [
+            "arm64",
+            "x64"
+          ]
         }
       ],
       "darkModeSupport": true,
@@ -129,8 +140,17 @@
       "title": "${productName} ${version}",
       "icon": "build/icon.icns",
       "contents": [
-        { "x": 130, "y": 220, "type": "file" },
-        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+        {
+          "x": 130,
+          "y": 220,
+          "type": "file"
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
       ],
       "window": {
         "width": 540,
@@ -140,7 +160,10 @@
     "linux": {
       "icon": "build/icon.png",
       "category": "Development",
-      "target": ["AppImage", "deb"]
+      "target": [
+        "AppImage",
+        "deb"
+      ]
     }
   }
 }
