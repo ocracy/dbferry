@@ -87,7 +87,8 @@ Scope = selected rows, else all visible rows.
 - Fixable: add only same-driver (no cross-driver type translation); drop always, except PK columns.
   Type mismatches are never auto-fixed — `ALTER TYPE` can lose data.
 - `schema:applyFixes` runs the user-checked actions on the **target only**, one by one; a failing
-  action does not abort the rest. Adds are pre-checked, drops start unchecked.
+  action does not abort the rest. Nothing is pre-selected — the dialog is a flat
+  table/column/change list with per-row checkboxes, a text filter and add/drop/type chips.
 - No `CREATE TABLE`: a table missing on the target is reported, never generated.
 
 ## Conventions
