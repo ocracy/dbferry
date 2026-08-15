@@ -18,13 +18,14 @@ Cross-DB (MySQL ⇄ PostgreSQL) desktop sync tool. Each project pairs a source +
 electron/
   main/
     index.ts                  app lifecycle, BrowserWindow, IPC wiring, schedule load
-    ipc/                      projects | connection | sync | history
+    ipc/                      projects | connection | sync | history | schema
     storage/                  sqlite + migrations + projects.repo + history.repo
     secrets/keytar.ts
     scheduler/cron.ts         per-project schedule + mutex + global emit
     sync-engine/
       adapters/{types,mysql,postgres}.ts
       type-mapper.ts          cross-DB coerceValue + intersectColumns
+      schema-diff.ts          source↔target column diff + confirmed add/drop DDL
       engine.ts               runSync orchestration, transactions, progress events
   preload/index.ts            contextBridge → window.api (typed)
 renderer/
@@ -33,7 +34,7 @@ renderer/
     App.tsx                   root + sticky sync bar + JSON drop zone
     layout/Sidebar.tsx
     projects/ProjectsPage.tsx + NewProjectDialog.tsx
-    projects/[id]/{ProjectDetailPage,ConnectionPanel,TablesGrid,ScheduleSelector,PasswordPrompt}.tsx
+    projects/[id]/{ProjectDetailPage,ConnectionPanel,TablesGrid,ScheduleSelector,PasswordPrompt,SchemaDiffDialog}.tsx
     components/{SyncStickyBar,JsonDropZone}.tsx
     history/HistoryPage.tsx
   components/ui/{Button,Input,Card,Select,Badge}.tsx   shadcn-style minimal kit
@@ -73,6 +74,21 @@ Path aliases: `@shared/*` → `shared/*`, `@/*` → `renderer/*`, `@main/*` → 
 - **full** is `TRUNCATE + COPY/INSERT` in a single transaction per table. Atomic per table, not across all tables.
 - The engine **does not auto-create target tables**. Target schema must already exist. Column intersect handles minor mismatches; `bulkWrite` will fail loudly on type mismatch.
 - Constraint disabling is session-scoped (`SET session_replication_role = 'replica'` on PG, `FOREIGN_KEY_CHECKS=0` on MySQL) and reset in `finally`.
+
+## Column diff (source ⇄ target)
+
+`TablesGrid` → **Compare columns** (or right-click a table → *Compare columns…*) opens `SchemaDiffDialog`.
+Scope = selected rows, else all visible rows.
+
+- `schema:diff` → `diffSchema()` reads `getColumns()` on both sides per table and reports
+  `missing-in-target` (add), `extra-in-target` (drop), `type-mismatch` (info only).
+- Type comparison only runs when source and target share a driver — `varchar(255)` vs
+  `character varying(255)` would otherwise flag every column.
+- Fixable: add only same-driver (no cross-driver type translation); drop always, except PK columns.
+  Type mismatches are never auto-fixed — `ALTER TYPE` can lose data.
+- `schema:applyFixes` runs the user-checked actions on the **target only**, one by one; a failing
+  action does not abort the rest. Adds are pre-checked, drops start unchecked.
+- No `CREATE TABLE`: a table missing on the target is reported, never generated.
 
 ## Conventions
 

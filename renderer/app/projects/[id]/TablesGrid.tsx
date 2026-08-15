@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { RefreshCw, Search, Loader2, AlertTriangle, Hash, X, Zap, Play, Sparkles, Trash2, KeyRound, ChevronDown } from 'lucide-react'
+import { RefreshCw, Search, Loader2, AlertTriangle, Hash, X, Zap, Play, Sparkles, Trash2, KeyRound, ChevronDown, Columns3 } from 'lucide-react'
 import type { Project, TableConfig, SyncMode } from '@shared/types'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/Badge'
 import { useSync } from '@/stores/sync'
 import { cn } from '@/lib/cn'
 import { toast } from 'sonner'
+import { SchemaDiffDialog } from './SchemaDiffDialog'
 
 interface Props {
   project: Project
@@ -36,6 +37,7 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
   const [diffOpen, setDiffOpen] = useState(true)
   const [newTables, setNewTables] = useState<Set<string>>(new Set())
   const [modeFilter, setModeFilter] = useState<ModeFilter>('all')
+  const [columnDiffFor, setColumnDiffFor] = useState<string[] | null>(null)
   const active = useSync((s) => s.active)
   const tables = project.tables
 
@@ -282,6 +284,20 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setColumnDiffFor(Array.from(targetNames()))}
+            disabled={!tables.length}
+            title={
+              selected.size > 0
+                ? `Compare columns of ${selected.size} selected table(s)`
+                : 'Compare columns of the visible tables'
+            }
+          >
+            <Columns3 className="size-3.5" />
+            Compare columns
+          </Button>
           <Button variant="outline" size="sm" onClick={countAll} disabled={countingAll || !tables.length}>
             {countingAll ? <Loader2 className="size-3.5 animate-spin" /> : <Hash className="size-3.5" />}
             Count all rows
@@ -388,7 +404,20 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
             countOne(contextMenu.table.name)
             setContextMenu(null)
           }}
+          onCompareColumns={() => {
+            setColumnDiffFor([contextMenu.table.name])
+            setContextMenu(null)
+          }}
           syncDisabled={disabled}
+        />
+      )}
+
+      {columnDiffFor && (
+        <SchemaDiffDialog
+          project={project}
+          tables={columnDiffFor}
+          onClose={() => setColumnDiffFor(null)}
+          onApplied={onTablesChanged}
         />
       )}
 
@@ -878,6 +907,7 @@ function ContextMenu({
   onSyncIncremental,
   onSyncFull,
   onCount,
+  onCompareColumns,
   syncDisabled
 }: {
   x: number
@@ -887,6 +917,7 @@ function ContextMenu({
   onSyncIncremental: () => void
   onSyncFull: () => void
   onCount: () => void
+  onCompareColumns: () => void
   syncDisabled: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -941,6 +972,11 @@ function ContextMenu({
         icon={<Hash className="size-3.5" />}
         label="Show table count"
         onClick={onCount}
+      />
+      <MenuItem
+        icon={<Columns3 className="size-3.5" />}
+        label="Compare columns…"
+        onClick={onCompareColumns}
       />
     </div>,
     document.body

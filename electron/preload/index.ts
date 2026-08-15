@@ -1,10 +1,13 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
+  ColumnFixAction,
+  ColumnFixResult,
   ConnectionTestResult,
   DbConfig,
   JsonProjectExport,
   Project,
   RunLog,
+  SchemaDiffResult,
   SyncProgressEvent,
   SyncRun,
   SyncTableRun,
@@ -68,6 +71,12 @@ const api = {
       ipcRenderer.invoke('connection:getMaxPk', { projectId, side, table, pkColumn }),
     pickCertFile: (title?: string): Promise<string | null> =>
       ipcRenderer.invoke('connection:pickCertFile', { title })
+  },
+  schema: {
+    diff: (projectId: string, tables?: string[]): Promise<SchemaDiffResult> =>
+      ipcRenderer.invoke('schema:diff', { projectId, tables }),
+    applyFixes: (projectId: string, actions: ColumnFixAction[]): Promise<ColumnFixResult[]> =>
+      ipcRenderer.invoke('schema:applyFixes', { projectId, actions })
   },
   sync: {
     start: (projectId: string): Promise<{ runId: string }> =>

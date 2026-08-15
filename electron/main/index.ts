@@ -5,6 +5,7 @@ import { registerProjectIpc } from './ipc/projects'
 import { registerConnectionIpc } from './ipc/connection'
 import { registerSyncIpc } from './ipc/sync'
 import { registerHistoryIpc } from './ipc/history'
+import { registerSchemaIpc } from './ipc/schema'
 import { registerUpdateIpc } from './ipc/update'
 import { loadAllSchedules, unscheduleAll } from './scheduler/cron'
 
@@ -48,6 +49,7 @@ app.whenReady().then(() => {
   registerConnectionIpc()
   registerSyncIpc(() => mainWindow)
   registerHistoryIpc()
+  registerSchemaIpc()
   registerUpdateIpc(() => mainWindow)
   createWindow()
   loadAllSchedules()

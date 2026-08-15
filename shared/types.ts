@@ -106,6 +106,49 @@ export interface TableMeta {
   pkColumn: string | null
 }
 
+/** A single column-level difference between the source and the target table. */
+export type ColumnDiffKind = 'missing-in-target' | 'extra-in-target' | 'type-mismatch'
+
+export interface ColumnDiff {
+  column: string
+  kind: ColumnDiffKind
+  sourceType: string | null
+  targetType: string | null
+  /** true when dbferry can generate the DDL to fix this difference */
+  fixable: boolean
+  /** why it is not fixable (shown in the UI) */
+  reason?: string
+}
+
+export interface TableColumnDiff {
+  table: string
+  /** target table does not exist at all — dbferry does not generate CREATE TABLE */
+  missingTable: boolean
+  error?: string
+  diffs: ColumnDiff[]
+}
+
+export interface SchemaDiffResult {
+  sourceType: DbType
+  targetType: DbType
+  sameDriver: boolean
+  scannedTables: number
+  checkedAt: number
+  /** only tables that have differences or an error */
+  tables: TableColumnDiff[]
+}
+
+export interface ColumnFixAction {
+  table: string
+  column: string
+  action: 'add' | 'drop'
+}
+
+export interface ColumnFixResult extends ColumnFixAction {
+  ok: boolean
+  error?: string
+}
+
 export interface UpdateCheckResult {
   currentVersion: string
   latestVersion: string | null
