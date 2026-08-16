@@ -1,7 +1,7 @@
 {
   "name": "dbferry",
   "productName": "dbferry",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Cross-database sync tool — MySQL ⇄ PostgreSQL desktop app for incremental and full table synchronization",
   "keywords": [
     "mysql",

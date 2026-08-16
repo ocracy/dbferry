@@ -1,6 +1,10 @@
 import { app, ipcMain, shell, BrowserWindow } from 'electron'
-import { createWriteStream, chmodSync } from 'node:fs'
-import { join } from 'node:path'
+import { createWriteStream, chmodSync, accessSync, constants } from 'node:fs'
+import { mkdtemp, readdir, writeFile } from 'node:fs/promises'
+import { execFile, spawn } from 'node:child_process'
+import { promisify } from 'node:util'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import type {
   UpdateCheckResult,
   UpdateDownloadResult,
@@ -47,8 +51,46 @@ function fmtBytes(n: number | null): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
+const execFileAsync = promisify(execFile)
+
+/** Escapes a path for safe interpolation into the single-quoted bash swap script. */
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`
+}
+
+/** `/Applications/dbferry.app` for a packaged mac build, null anywhere else. */
+function macBundlePath(): string | null {
+  if (process.platform !== 'darwin' || !app.isPackaged) return null
+  const exe = app.getPath('exe') // …/dbferry.app/Contents/MacOS/dbferry
+  const idx = exe.indexOf('.app/')
+  return idx === -1 ? null : exe.slice(0, idx + 4)
+}
+
+/**
+ * A self-update rewrites the bundle in place, so both the bundle and the directory
+ * holding it must be writable — an app under /Applications installed by another user,
+ * or one still running from a mounted DMG, falls back to the installer flow.
+ */
+function canSelfUpdateMac(): { bundle: string } | null {
+  const bundle = macBundlePath()
+  if (!bundle) return null
+  if (bundle.startsWith('/Volumes/')) return null
+  try {
+    accessSync(bundle, constants.W_OK)
+    accessSync(dirname(bundle), constants.W_OK)
+    return { bundle }
+  } catch {
+    return null
+  }
+}
+
 // Choose the release asset matching the running platform + architecture.
-function pickAsset(assets: GithubAsset[], platform: NodeJS.Platform, arch: string): GithubAsset | undefined {
+function pickAsset(
+  assets: GithubAsset[],
+  platform: NodeJS.Platform,
+  arch: string,
+  preferZip = false
+): GithubAsset | undefined {
   const find = (pred: (name: string) => boolean) =>
     assets.find((a) => pred(a.name.toLowerCase()))
   if (platform === 'darwin') {
@@ -57,6 +99,11 @@ function pickAsset(assets: GithubAsset[], platform: NodeJS.Platform, arch: strin
     const isArm = (n: string) => n.includes('arm64') || n.includes('aarch64')
     const wantArm = arch === 'arm64'
     const archMatch = (n: string) => (wantArm ? isArm(n) : !isArm(n))
+    // The zip holds the .app bundle directly — that is what an in-place swap needs.
+    if (preferZip) {
+      const zip = find((n) => n.endsWith('.zip') && archMatch(n))
+      if (zip) return zip
+    }
     return (
       find((n) => n.endsWith('.dmg') && archMatch(n)) ||
       find((n) => n.endsWith('.zip') && archMatch(n)) ||
@@ -85,6 +132,67 @@ async function fetchLatestRelease(currentVersion: string): Promise<GithubRelease
   })
   if (!res.ok) throw new Error(`GitHub API responded ${res.status}`)
   return (await res.json()) as GithubRelease
+}
+
+/**
+ * Unpacks the downloaded zip and hands the bundle swap to a detached bash script:
+ * the running app cannot replace its own bundle, so the script waits for this
+ * process to exit, swaps the directories, then relaunches the new build.
+ * Returns the script path — the caller quits the app to let it proceed.
+ */
+async function stageMacSwap(
+  zipPath: string,
+  bundle: string,
+  log: (level: UpdateLogEvent['level'], message: string) => void
+): Promise<string> {
+  const staging = await mkdtemp(join(tmpdir(), 'dbferry-update-'))
+  log('info', 'Unpacking update…')
+  // ditto (not unzip) — it preserves symlinks, permissions and code-signature metadata.
+  await execFileAsync('/usr/bin/ditto', ['-x', '-k', zipPath, staging])
+
+  const entries = await readdir(staging)
+  const appName = entries.find((e) => e.endsWith('.app'))
+  if (!appName) throw new Error(`No .app bundle inside ${zipPath}`)
+  const newApp = join(staging, appName)
+  log('info', `Unpacked ${appName}`)
+
+  const scriptPath = join(staging, 'swap.sh')
+  const logPath = join(staging, 'swap.log')
+  const script = `#!/bin/bash
+TARGET=${shellQuote(bundle)}
+NEW=${shellQuote(newApp)}
+STAGING=${shellQuote(staging)}
+ZIP=${shellQuote(zipPath)}
+BACKUP="$TARGET.dbferry-old"
+exec >>${shellQuote(logPath)} 2>&1
+
+# Wait for dbferry to exit — up to 30s, then stop waiting politely.
+for _ in $(seq 1 300); do
+  kill -0 ${process.pid} 2>/dev/null || break
+  sleep 0.1
+done
+kill -0 ${process.pid} 2>/dev/null && kill -TERM ${process.pid} 2>/dev/null
+sleep 0.5
+
+rm -rf "$BACKUP"
+if ! mv "$TARGET" "$BACKUP"; then
+  echo "could not move the old bundle aside"
+  open "$TARGET"
+  exit 1
+fi
+if ditto "$NEW" "$TARGET"; then
+  xattr -dr com.apple.quarantine "$TARGET" 2>/dev/null
+  rm -rf "$BACKUP" "$ZIP"
+  echo "installed"
+else
+  echo "install failed — restoring the previous version"
+  rm -rf "$TARGET"
+  mv "$BACKUP" "$TARGET"
+fi
+open "$TARGET"
+`
+  await writeFile(scriptPath, script, { mode: 0o755 })
+  return scriptPath
 }
 
 export function registerUpdateIpc(getWindow: () => BrowserWindow | null): void {
@@ -158,7 +266,14 @@ export function registerUpdateIpc(getWindow: () => BrowserWindow | null): void {
       emitLog('info', `Latest release: ${release.tag_name} · ${assets.length} asset(s)`)
       if (assets.length === 0) return fail('Release has no downloadable assets')
 
-      const asset = pickAsset(assets, process.platform, process.arch)
+      const selfUpdate = canSelfUpdateMac()
+      if (selfUpdate) {
+        emitLog('info', `Will replace ${selfUpdate.bundle} in place`)
+      } else if (process.platform === 'darwin') {
+        emitLog('warn', 'In-place update not possible here — falling back to the disk image')
+      }
+
+      const asset = pickAsset(assets, process.platform, process.arch, !!selfUpdate)
       if (!asset) {
         return fail(
           `No compatible installer for ${process.platform}/${process.arch}. Available: ${assets
@@ -214,18 +329,52 @@ export function registerUpdateIpc(getWindow: () => BrowserWindow | null): void {
         }
       }
 
+      // Preferred path on macOS: swap the bundle ourselves and relaunch — no DMG,
+      // no dragging, and no "the app is open" error.
+      if (selfUpdate && asset.name.toLowerCase().endsWith('.zip')) {
+        try {
+          const scriptPath = await stageMacSwap(destPath, selfUpdate.bundle, emitLog)
+          emitLog('info', 'Installing update and restarting dbferry…')
+          spawn('/bin/bash', [scriptPath], { detached: true, stdio: 'ignore' }).unref()
+          // Give the renderer a moment to paint the final log line before we go.
+          setTimeout(() => app.quit(), 1200)
+          return {
+            ok: true,
+            filePath: destPath,
+            assetName: asset.name,
+            mode: 'self-update',
+            quitting: true
+          }
+        } catch (err) {
+          emitLog(
+            'warn',
+            `In-place update failed: ${err instanceof Error ? err.message : String(err)}`
+          )
+          emitLog('info', 'Falling back to opening the downloaded file…')
+        }
+      }
+
       emitLog('info', 'Opening installer…')
       const openErr = await shell.openPath(destPath)
       if (openErr) {
         emitLog('warn', `Could not auto-open installer: ${openErr}`)
         emitLog('info', `File is saved at ${destPath} — open it manually.`)
-      } else if (process.platform === 'darwin') {
-        emitLog('info', 'DMG opened. Drag dbferry into Applications to finish, then relaunch.')
-      } else {
-        emitLog('info', 'Installer opened.')
+        return { ok: true, filePath: destPath, assetName: asset.name, mode: 'installer' }
       }
-
-      return { ok: true, filePath: destPath, assetName: asset.name }
+      if (process.platform === 'darwin') {
+        // Quit before the user drags: macOS refuses to overwrite a running bundle.
+        emitLog('info', 'DMG opened. Quitting dbferry so you can drop it into Applications…')
+        setTimeout(() => app.quit(), 2000)
+        return {
+          ok: true,
+          filePath: destPath,
+          assetName: asset.name,
+          mode: 'installer',
+          quitting: true
+        }
+      }
+      emitLog('info', 'Installer opened.')
+      return { ok: true, filePath: destPath, assetName: asset.name, mode: 'installer' }
     } catch (err) {
       return fail(`Update failed: ${err instanceof Error ? err.message : String(err)}`)
     }

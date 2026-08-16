@@ -95,6 +95,7 @@ function UpdateDialog({ result, onClose }: { result: UpdateCheckResult; onClose:
   const [logs, setLogs] = useState<UpdateLogEvent[]>([])
   const [progress, setProgress] = useState<UpdateProgressEvent | null>(null)
   const [filePath, setFilePath] = useState<string | null>(null)
+  const [finish, setFinish] = useState<{ mode?: string; quitting?: boolean } | null>(null)
   const logEndRef = useRef<HTMLDivElement>(null)
 
   // Auto-scroll the log console to the newest line.
@@ -107,12 +108,14 @@ function UpdateDialog({ result, onClose }: { result: UpdateCheckResult; onClose:
     setLogs([])
     setProgress(null)
     setFilePath(null)
+    setFinish(null)
     const offLog = api.update.onLog((e) => setLogs((prev) => [...prev, e]))
     const offProgress = api.update.onProgress((e) => setProgress(e))
     try {
       const r = await api.update.download()
       if (r.ok) {
         setFilePath(r.filePath)
+        setFinish({ mode: r.mode, quitting: r.quitting })
         setPhase('done')
       } else {
         setPhase('error')
@@ -159,7 +162,23 @@ function UpdateDialog({ result, onClose }: { result: UpdateCheckResult; onClose:
           {phase === 'idle' && (
             <p className="text-[12.5px] text-text-muted">
               This downloads {result.releaseName ? `“${result.releaseName}”` : 'the latest release'} for your
-              platform and opens the installer. Live logs appear below so you can see any errors.
+              platform, installs it over the running app and restarts. Live logs appear below so you
+              can see any errors.
+            </p>
+          )}
+
+          {phase === 'done' && finish?.quitting && (
+            <p
+              className={cn(
+                'text-[12.5px] rounded-lg border px-3 py-2',
+                finish.mode === 'self-update'
+                  ? 'border-accent/40 bg-accent/10 text-accent'
+                  : 'border-warn/40 bg-warn/10 text-warn'
+              )}
+            >
+              {finish.mode === 'self-update'
+                ? 'Installing and restarting dbferry — this window closes on its own.'
+                : 'Quitting so the app is not running while you drop it into Applications.'}
             </p>
           )}
 

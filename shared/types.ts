@@ -175,5 +175,9 @@ export interface UpdateDownloadResult {
   ok: boolean
   filePath: string | null
   assetName: string | null
+  /** 'self-update' replaces the app bundle and relaunches; 'installer' opens the dmg/AppImage */
+  mode?: 'self-update' | 'installer'
+  /** true when the app is about to quit to finish the update */
+  quitting?: boolean
   error?: string
 }

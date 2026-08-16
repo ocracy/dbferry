@@ -108,6 +108,24 @@ Scope = selected rows, else all visible rows.
 
 Drag-drop on the window triggers `JsonDropZone` → `api.projects.importJson({content})` → name collision resolves with `(2)` suffix. Passwords are not in the file; user must re-enter via `PasswordPrompt`.
 
+## In-app updater (`electron/main/ipc/update.ts`)
+
+Builds are unsigned, so electron-updater/Squirrel is not usable — the updater is hand-rolled
+against the GitHub releases API of `ocracy/dbferry`.
+
+- **macOS, packaged, bundle writable** (`canSelfUpdateMac`): downloads the arch-matched **zip**,
+  `ditto -x -k` into a temp staging dir, writes a detached bash script and quits. The script waits
+  for the old PID to exit, `mv`s the bundle aside, `ditto`s the new one in place, strips the
+  quarantine xattr and `open`s the app. A failed `ditto` restores the backup — the user is never
+  left without an app. No DMG, no dragging.
+- **Otherwise** (dev, app on a mounted DMG or non-writable bundle): downloads the dmg/AppImage and
+  opens it. On macOS the app then **quits itself**, because macOS refuses to overwrite a running
+  bundle while the user drags.
+- The running build's updater does the updating, so changes here only take effect on the
+  version *after* the one being released.
+- `pickAsset` matches x64 by the *absence* of an arm marker — electron-builder names arm64 assets
+  `…-arm64.dmg` but x64 ones plain `….dmg`.
+
 ## Dev / build
 
 ```bash
