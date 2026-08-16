@@ -26,6 +26,7 @@ electron/
       adapters/{types,mysql,postgres}.ts
       type-mapper.ts          cross-DB coerceValue + intersectColumns
       schema-diff.ts          source↔target column diff + confirmed add/drop DDL
+      ddl.ts                  cross-driver type mapping + CREATE TABLE generation
       engine.ts               runSync orchestration, transactions, progress events
   preload/index.ts            contextBridge → window.api (typed)
 renderer/
@@ -34,7 +35,7 @@ renderer/
     App.tsx                   root + sticky sync bar + JSON drop zone
     layout/Sidebar.tsx
     projects/ProjectsPage.tsx + NewProjectDialog.tsx
-    projects/[id]/{ProjectDetailPage,ConnectionPanel,TablesGrid,ScheduleSelector,PasswordPrompt,SchemaDiffDialog}.tsx
+    projects/[id]/{ProjectDetailPage,ConnectionPanel,TablesGrid,ScheduleSelector,PasswordPrompt,SchemaDiffDialog,CreateTablesDialog}.tsx
     components/{SyncStickyBar,JsonDropZone}.tsx
     history/HistoryPage.tsx
   components/ui/{Button,Input,Card,Select,Badge}.tsx   shadcn-style minimal kit
@@ -72,7 +73,7 @@ Path aliases: `@shared/*` → `shared/*`, `@/*` → `renderer/*`, `@main/*` → 
 - **disabled** is the default for newly discovered tables — `TablesGrid.fetchTables` merges new source tables as `disabled`.
 - **incremental** is append-only: only `pk > MAX(target.pk)` rows go through. Updates and deletes do **not** propagate. PK must be a single integer-like column. UUID/composite PKs are not supported in incremental mode (UI doesn't enforce yet — engine throws if MAX(pk) lookup fails).
 - **full** is `TRUNCATE + COPY/INSERT` in a single transaction per table. Atomic per table, not across all tables.
-- The engine **does not auto-create target tables**. Target schema must already exist. Column intersect handles minor mismatches; `bulkWrite` will fail loudly on type mismatch.
+- The engine **never creates tables during a sync**. A missing target table fails that table with a message pointing at *Create in target* — schema writes stay an explicit, reviewed step (see "Creating missing tables"). Column intersect handles minor mismatches; `bulkWrite` will fail loudly on type mismatch.
 - Constraint disabling is session-scoped (`SET session_replication_role = 'replica'` on PG, `FOREIGN_KEY_CHECKS=0` on MySQL) and reset in `finally`.
 
 ## Column diff (source ⇄ target)
@@ -108,6 +109,25 @@ Scope = selected rows, else all visible rows.
 
 Drag-drop on the window triggers `JsonDropZone` → `api.projects.importJson({content})` → name collision resolves with `(2)` suffix. Passwords are not in the file; user must re-enter via `PasswordPrompt`.
 
+## Creating missing tables
+
+A table that exists on the source but not on the target is surfaced, never created behind the
+user's back — schema writes are always an explicit, reviewed step.
+
+- `TablesGrid.refreshMissing` (runs on **Refresh**) diffs the source table list against
+  `connection:listTables` on the target. The result drives a `not in target` filter chip, a
+  per-row badge, and the header's **Create N in target** button. Sync entries in the row's
+  context menu are disabled for those tables.
+- `schema:planCreateTables` → `planCreateTables()` builds the DDL **without running it**;
+  `CreateTablesDialog` shows the statement per table plus the type-translation warnings, and only
+  `schema:createTables` executes the approved ones.
+- `ddl.ts` owns the translation. Same driver keeps `fullType` verbatim; cross-driver goes through
+  `mysqlToPg` / `pgToMysql` (`tinyint(1)`↔`boolean`, `datetime`↔`timestamp`, `json`↔`jsonb`,
+  `uuid`→`char(36)`, arrays→`json`, unsigned widening, …). A text/blob primary key is narrowed to
+  `varchar(255)` because MySQL cannot index it otherwise.
+- Generated tables carry columns, nullability and the primary key — nothing else. Add new type
+  rules in `ddl.ts`, next to the value rules in `type-mapper.ts`.
+
 ## In-app updater (`electron/main/ipc/update.ts`)
 
 Builds are unsigned, so electron-updater/Squirrel is not usable — the updater is hand-rolled
@@ -141,7 +161,7 @@ If you change anything in `electron/main` or `electron/preload`, electron-vite r
 
 ## Known limitations / V2 ideas
 
-- No auto-create of target tables (no DDL generation).
+- Generated `CREATE TABLE` covers columns, nullability and the primary key only — no indexes, defaults, foreign keys, auto-increment or collations.
 - No timestamp-based incremental (only `MAX(pk)` watermark).
 - No composite/UUID PK incremental.
 - No bidirectional sync, no conflict resolution.

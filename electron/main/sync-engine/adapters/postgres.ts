@@ -133,6 +133,10 @@ export class PostgresAdapter implements DbAdapter {
     return r.rows.map((row) => ({ name: row.name, pkColumn: row.pk ?? null }))
   }
 
+  async execute(sql: string): Promise<void> {
+    await this.client.query(sql)
+  }
+
   async addColumn(table: string, col: ColumnInfo): Promise<void> {
     const typeSql = col.fullType || col.dataType
     await this.client.query(

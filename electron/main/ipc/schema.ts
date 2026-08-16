@@ -1,6 +1,17 @@
 import { ipcMain } from 'electron'
-import type { ColumnFixAction, ColumnFixResult, SchemaDiffResult } from '@shared/types'
-import { applyColumnFixes, diffSchema } from '../sync-engine/schema-diff'
+import type {
+  ColumnFixAction,
+  ColumnFixResult,
+  CreateTablePlan,
+  CreateTableResult,
+  SchemaDiffResult
+} from '@shared/types'
+import {
+  applyColumnFixes,
+  createTables,
+  diffSchema,
+  planCreateTables
+} from '../sync-engine/schema-diff'
 import { secrets } from '../secrets/keytar'
 import { projectsRepo } from '../storage/projects.repo'
 
@@ -26,6 +37,22 @@ export function registerSchemaIpc(): void {
           ? payload.tables
           : project.tables.map((t) => t.name)
       return diffSchema(project, srcPwd, tgtPwd, names)
+    }
+  )
+
+  ipcMain.handle(
+    'schema:planCreateTables',
+    async (_e, payload: { projectId: string; tables: string[] }): Promise<CreateTablePlan[]> => {
+      const { project, srcPwd, tgtPwd } = await loadContext(payload.projectId)
+      return planCreateTables(project, srcPwd, tgtPwd, payload.tables ?? [])
+    }
+  )
+
+  ipcMain.handle(
+    'schema:createTables',
+    async (_e, payload: { projectId: string; tables: string[] }): Promise<CreateTableResult[]> => {
+      const { project, srcPwd, tgtPwd } = await loadContext(payload.projectId)
+      return createTables(project, srcPwd, tgtPwd, payload.tables ?? [])
     }
   )
 

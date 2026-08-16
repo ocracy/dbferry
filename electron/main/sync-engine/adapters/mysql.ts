@@ -104,6 +104,10 @@ export class MysqlAdapter implements DbAdapter {
     }))
   }
 
+  async execute(sql: string): Promise<void> {
+    await this.conn.query(sql)
+  }
+
   async addColumn(table: string, col: ColumnInfo): Promise<void> {
     // Always use fullType (e.g. `varchar(255)`) — DATA_TYPE alone is invalid for VARCHAR/etc.
     // Always allow NULL on added columns to avoid backfill failures on existing rows.

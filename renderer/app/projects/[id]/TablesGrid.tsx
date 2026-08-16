@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { RefreshCw, Search, Loader2, AlertTriangle, Hash, X, Zap, Play, Sparkles, Trash2, KeyRound, ChevronDown, Columns3 } from 'lucide-react'
+import { RefreshCw, Search, Loader2, AlertTriangle, Hash, X, Zap, Play, Sparkles, Trash2, KeyRound, ChevronDown, Columns3, TableProperties } from 'lucide-react'
 import type { Project, TableConfig, SyncMode } from '@shared/types'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
@@ -10,6 +10,7 @@ import { useSync } from '@/stores/sync'
 import { cn } from '@/lib/cn'
 import { toast } from 'sonner'
 import { SchemaDiffDialog } from './SchemaDiffDialog'
+import { CreateTablesDialog } from './CreateTablesDialog'
 
 interface Props {
   project: Project
@@ -23,7 +24,7 @@ interface TableDiff {
   pkChanged: { name: string; from: string; to: string }[]
 }
 
-type ModeFilter = 'all' | 'disabled' | 'incremental' | 'full' | 'new'
+type ModeFilter = 'all' | 'disabled' | 'incremental' | 'full' | 'new' | 'missing'
 
 export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
   const [loading, setLoading] = useState(false)
@@ -38,8 +39,25 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
   const [newTables, setNewTables] = useState<Set<string>>(new Set())
   const [modeFilter, setModeFilter] = useState<ModeFilter>('all')
   const [columnDiffFor, setColumnDiffFor] = useState<string[] | null>(null)
+  const [createFor, setCreateFor] = useState<string[] | null>(null)
+  // Tables that exist on the source but not on the target — they cannot sync until created.
+  const [missing, setMissing] = useState<Set<string>>(new Set())
   const active = useSync((s) => s.active)
   const tables = project.tables
+
+  /** Which of the source tables are absent on the target. Silent if the target is unreachable. */
+  const refreshMissing = async (sourceNames: string[]): Promise<Set<string>> => {
+    try {
+      const targetTables = await api.connection.listTables(project.id, 'target')
+      const known = new Set(targetTables.map((t) => t.toLowerCase()))
+      const miss = new Set(sourceNames.filter((n) => !known.has(n.toLowerCase())))
+      setMissing(miss)
+      return miss
+    } catch {
+      setMissing(new Set())
+      return new Set()
+    }
+  }
 
   const fetchTables = async () => {
     setLoading(true)
@@ -80,6 +98,13 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
         toast.success(`Schema changed · ${bits.join(' · ')}`)
       } else if (prevNames.size > 0) {
         toast.success('No table changes since last refresh')
+      }
+
+      const miss = await refreshMissing(list)
+      if (miss.size) {
+        toast.warning(
+          `${miss.size} table(s) do not exist in the target yet — select them and use "Create in target"`
+        )
       }
 
       const noPk = meta.filter((m) => !m.pkColumn).map((m) => m.name)
@@ -145,13 +170,20 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
   const filtered = useMemo(() => {
     let list = tables
     if (modeFilter === 'new') list = list.filter((t) => newTables.has(t.name))
+    else if (modeFilter === 'missing') list = list.filter((t) => missing.has(t.name))
     else if (modeFilter !== 'all') list = list.filter((t) => t.mode === modeFilter)
     if (filter) {
       const q = filter.toLowerCase()
       list = list.filter((t) => t.name.toLowerCase().includes(q))
     }
     return list
-  }, [tables, filter, modeFilter, newTables])
+  }, [tables, filter, modeFilter, newTables, missing])
+
+  /** Missing tables to act on: the selected ones, or all of them when nothing is selected. */
+  const missingTargets = () => {
+    const selectedMissing = Array.from(selected).filter((n) => missing.has(n))
+    return selectedMissing.length > 0 ? selectedMissing : Array.from(missing)
+  }
 
   // Bulk action targets selected rows; if none selected, falls back to all visible
   const targetNames = () =>
@@ -272,6 +304,16 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
             active={modeFilter === 'disabled'}
             onClick={() => setModeFilter((f) => (f === 'disabled' ? 'all' : 'disabled'))}
           />
+          {missing.size > 0 && (
+            <FilterChip
+              label="not in target"
+              count={missing.size}
+              tone="danger"
+              active={modeFilter === 'missing'}
+              icon={<TableProperties className="size-3" />}
+              onClick={() => setModeFilter((f) => (f === 'missing' ? 'all' : 'missing'))}
+            />
+          )}
           {newTables.size > 0 && (
             <FilterChip
               label="new"
@@ -284,6 +326,19 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {missing.size > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-danger/40 text-danger hover:bg-danger/10"
+              onClick={() => setCreateFor(missingTargets())}
+              disabled={disabled}
+              title="Create the missing tables on the target, after reviewing the SQL"
+            >
+              <TableProperties className="size-3.5" />
+              Create {missingTargets().length} in target
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -408,6 +463,11 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
             setColumnDiffFor([contextMenu.table.name])
             setContextMenu(null)
           }}
+          onCreateInTarget={() => {
+            setCreateFor([contextMenu.table.name])
+            setContextMenu(null)
+          }}
+          missingInTarget={missing.has(contextMenu.table.name)}
           syncDisabled={disabled}
         />
       )}
@@ -418,6 +478,22 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
           tables={columnDiffFor}
           onClose={() => setColumnDiffFor(null)}
           onApplied={onTablesChanged}
+          onCreateTables={(names) => {
+            setColumnDiffFor(null)
+            setCreateFor(names)
+          }}
+        />
+      )}
+
+      {createFor && (
+        <CreateTablesDialog
+          project={project}
+          tables={createFor}
+          onClose={() => setCreateFor(null)}
+          onCreated={() => {
+            void refreshMissing(tables.map((t) => t.name))
+            onTablesChanged()
+          }}
         />
       )}
 
@@ -509,6 +585,7 @@ export function TablesGrid({ project, onTablesChanged, disabled }: Props) {
                   toggleAddColumn={() => toggleAddColumn(t)}
                   toggleDropColumn={() => toggleDropColumn(t)}
                   runStatus={active?.tables[t.name]}
+                  missingInTarget={missing.has(t.name)}
                   flag={
                     newTables.has(t.name)
                       ? 'new'
@@ -551,7 +628,7 @@ function FilterChip({
 }: {
   label: string
   count: number
-  tone: 'accent' | 'warn' | 'neutral' | 'success'
+  tone: 'accent' | 'warn' | 'neutral' | 'success' | 'danger'
   active: boolean
   icon?: React.ReactNode
   onClick: () => void
@@ -563,7 +640,9 @@ function FilterChip({
         ? 'bg-warn/20 text-warn border-warn/50'
         : tone === 'success'
           ? 'bg-success/20 text-success border-success/50'
-          : 'bg-text/10 text-text border-text-muted/50'
+          : tone === 'danger'
+            ? 'bg-danger/20 text-danger border-danger/50'
+            : 'bg-text/10 text-text border-text-muted/50'
   return (
     <button
       onClick={onClick}
@@ -785,6 +864,7 @@ function TableRow({
   toggleDropColumn,
   runStatus,
   flag,
+  missingInTarget,
   onContextMenu
 }: {
   table: TableConfig
@@ -798,6 +878,7 @@ function TableRow({
   toggleDropColumn: () => void
   runStatus?: { status: string; rowsCopied: number; rowsPerSec: number; total?: number; error?: string }
   flag?: 'new' | 'removed'
+  missingInTarget?: boolean
   onContextMenu: (e: React.MouseEvent) => void
 }) {
   return (
@@ -834,6 +915,15 @@ function TableRow({
             >
               <Trash2 className="size-2.5" />
               removed
+            </span>
+          )}
+          {missingInTarget && (
+            <span
+              title="Does not exist in the target — right-click to create it before syncing"
+              className="shrink-0 inline-flex items-center gap-0.5 rounded px-1 py-px text-[9px] uppercase tracking-wide bg-danger/15 text-danger"
+            >
+              <TableProperties className="size-2.5" />
+              not in target
             </span>
           )}
         </span>
@@ -908,6 +998,8 @@ function ContextMenu({
   onSyncFull,
   onCount,
   onCompareColumns,
+  onCreateInTarget,
+  missingInTarget,
   syncDisabled
 }: {
   x: number
@@ -918,6 +1010,8 @@ function ContextMenu({
   onSyncFull: () => void
   onCount: () => void
   onCompareColumns: () => void
+  onCreateInTarget: () => void
+  missingInTarget: boolean
   syncDisabled: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -955,17 +1049,31 @@ function ContextMenu({
         {tableName}
       </div>
       <div className="h-px bg-line/30 my-1" />
+      {missingInTarget && (
+        <>
+          <div className="px-3 pb-1 text-[10.5px] text-danger">
+            Not in target — create it to enable sync
+          </div>
+          <MenuItem
+            icon={<TableProperties className="size-3.5 text-danger" />}
+            label="Create in target…"
+            onClick={onCreateInTarget}
+            disabled={syncDisabled}
+          />
+          <div className="h-px bg-line/30 my-1" />
+        </>
+      )}
       <MenuItem
         icon={<Play className="size-3.5 text-accent" />}
         label="Sync Incremental Now"
         onClick={onSyncIncremental}
-        disabled={syncDisabled}
+        disabled={syncDisabled || missingInTarget}
       />
       <MenuItem
         icon={<Play className="size-3.5 text-warn" />}
         label="Sync Full Now"
         onClick={onSyncFull}
-        disabled={syncDisabled}
+        disabled={syncDisabled || missingInTarget}
       />
       <div className="h-px bg-line/30 my-1" />
       <MenuItem

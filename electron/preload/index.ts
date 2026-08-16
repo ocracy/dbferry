@@ -3,6 +3,8 @@ import type {
   ColumnFixAction,
   ColumnFixResult,
   ConnectionTestResult,
+  CreateTablePlan,
+  CreateTableResult,
   DbConfig,
   JsonProjectExport,
   Project,
@@ -76,7 +78,11 @@ const api = {
     diff: (projectId: string, tables?: string[]): Promise<SchemaDiffResult> =>
       ipcRenderer.invoke('schema:diff', { projectId, tables }),
     applyFixes: (projectId: string, actions: ColumnFixAction[]): Promise<ColumnFixResult[]> =>
-      ipcRenderer.invoke('schema:applyFixes', { projectId, actions })
+      ipcRenderer.invoke('schema:applyFixes', { projectId, actions }),
+    planCreateTables: (projectId: string, tables: string[]): Promise<CreateTablePlan[]> =>
+      ipcRenderer.invoke('schema:planCreateTables', { projectId, tables }),
+    createTables: (projectId: string, tables: string[]): Promise<CreateTableResult[]> =>
+      ipcRenderer.invoke('schema:createTables', { projectId, tables })
   },
   sync: {
     start: (projectId: string): Promise<{ runId: string }> =>

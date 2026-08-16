@@ -28,6 +28,8 @@ export interface DbAdapter {
   listTablesMeta(): Promise<TableMeta[]>
   countRows(table: string): Promise<number>
   countRowsAfterPk(table: string, pkColumn: string, pkGreaterThan: string | number | bigint): Promise<number>
+  /** Runs a DDL statement built by `sync-engine/ddl.ts`. Never used for user input. */
+  execute(sql: string): Promise<void>
   addColumn(table: string, col: ColumnInfo): Promise<void>
   dropColumn(table: string, columnName: string): Promise<void>
   getColumns(table: string): Promise<ColumnInfo[]>

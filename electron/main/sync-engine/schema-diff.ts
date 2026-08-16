@@ -3,6 +3,8 @@ import type {
   ColumnFixAction,
   ColumnFixResult,
   ColumnInfo,
+  CreateTablePlan,
+  CreateTableResult,
   Project,
   SchemaDiffResult,
   TableColumnDiff
@@ -11,6 +13,7 @@ import type { DbAdapter } from './adapters/types'
 import { MysqlAdapter } from './adapters/mysql'
 import { PostgresAdapter } from './adapters/postgres'
 import { intersectColumns } from './type-mapper'
+import { buildCreateTable } from './ddl'
 
 function adapterFor(type: Project['source']['type'], config: Project['source'], password: string): DbAdapter {
   if (type === 'mysql') return new MysqlAdapter({ config, password })
@@ -136,6 +139,95 @@ export async function diffSchema(
     checkedAt: Date.now(),
     tables
   }
+}
+
+/**
+ * Builds the CREATE TABLE statement for each requested table without running it,
+ * so the user can read the DDL before approving it.
+ */
+export async function planCreateTables(
+  project: Project,
+  srcPwd: string,
+  tgtPwd: string,
+  tableNames: string[]
+): Promise<CreateTablePlan[]> {
+  if (tableNames.length === 0) return []
+
+  return withConnections(project, srcPwd, tgtPwd, async (src, tgt) => {
+    const existing = new Set((await tgt.listTables()).map((t) => t.toLowerCase()))
+    const plans: CreateTablePlan[] = []
+
+    for (const table of tableNames) {
+      const base: CreateTablePlan = {
+        table,
+        sql: null,
+        warnings: [],
+        columnCount: 0,
+        pkColumn: null,
+        exists: existing.has(table.toLowerCase())
+      }
+      if (base.exists) {
+        plans.push(base)
+        continue
+      }
+      try {
+        const cols = await src.getColumns(table)
+        const { sql, warnings } = buildCreateTable(
+          table,
+          cols,
+          project.source.type,
+          project.target.type,
+          (n) => tgt.identifier(n)
+        )
+        plans.push({
+          ...base,
+          sql,
+          warnings,
+          columnCount: cols.length,
+          pkColumn: cols.find((c) => c.isPrimaryKey)?.name ?? null
+        })
+      } catch (err) {
+        plans.push({ ...base, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    return plans
+  })
+}
+
+/** Runs the approved CREATE TABLE statements on the target. One failure does not stop the rest. */
+export async function createTables(
+  project: Project,
+  srcPwd: string,
+  tgtPwd: string,
+  tableNames: string[]
+): Promise<CreateTableResult[]> {
+  if (tableNames.length === 0) return []
+
+  return withConnections(project, srcPwd, tgtPwd, async (src, tgt) => {
+    const existing = new Set((await tgt.listTables()).map((t) => t.toLowerCase()))
+    const results: CreateTableResult[] = []
+
+    for (const table of tableNames) {
+      try {
+        if (existing.has(table.toLowerCase())) {
+          throw new Error('Table already exists on the target')
+        }
+        const cols = await src.getColumns(table)
+        const { sql } = buildCreateTable(
+          table,
+          cols,
+          project.source.type,
+          project.target.type,
+          (n) => tgt.identifier(n)
+        )
+        await tgt.execute(sql)
+        results.push({ table, ok: true })
+      } catch (err) {
+        results.push({ table, ok: false, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    return results
+  })
 }
 
 /**

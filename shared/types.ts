@@ -149,6 +149,25 @@ export interface ColumnFixResult extends ColumnFixAction {
   error?: string
 }
 
+/** The CREATE TABLE dbferry would run on the target, shown for approval before it runs. */
+export interface CreateTablePlan {
+  table: string
+  sql: string | null
+  /** type translations and other things worth knowing before approving */
+  warnings: string[]
+  columnCount: number
+  pkColumn: string | null
+  /** already present on the target — nothing to do */
+  exists: boolean
+  error?: string
+}
+
+export interface CreateTableResult {
+  table: string
+  ok: boolean
+  error?: string
+}
+
 export interface UpdateCheckResult {
   currentVersion: string
   latestVersion: string | null

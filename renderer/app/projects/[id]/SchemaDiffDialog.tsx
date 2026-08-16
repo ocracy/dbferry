@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Search,
   Table2,
+  TableProperties,
   X
 } from 'lucide-react'
 import type { ColumnFixAction, Project, SchemaDiffResult } from '@shared/types'
@@ -26,6 +27,8 @@ interface Props {
   tables: string[]
   onClose: () => void
   onApplied: () => void
+  /** hands the missing tables over to the create-table flow */
+  onCreateTables?: (tables: string[]) => void
 }
 
 /** One actionable line: a column that will be created on, or removed from, the target. */
@@ -51,7 +54,7 @@ interface TypeRow {
 
 type Tab = 'changes' | 'types'
 
-export function SchemaDiffDialog({ project, tables, onClose, onApplied }: Props) {
+export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreateTables }: Props) {
   const [result, setResult] = useState<SchemaDiffResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [applying, setApplying] = useState(false)
@@ -367,8 +370,21 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied }: Props)
                     <Notice
                       tone="danger"
                       title={`${missingTables.length} table(s) do not exist on the target`}
-                      detail="dbferry never generates CREATE TABLE — create them manually, then re-check."
+                      detail="They cannot sync until they exist. Review the CREATE TABLE and create them."
                       items={missingTables}
+                      action={
+                        onCreateTables && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="border-danger/40 text-danger hover:bg-danger/10"
+                            onClick={() => onCreateTables(missingTables)}
+                          >
+                            <TableProperties className="size-3.5" />
+                            Create {missingTables.length} in target
+                          </Button>
+                        )
+                      }
                     />
                   )}
                   {erroredTables.length > 0 && (
@@ -591,12 +607,14 @@ function Notice({
   tone,
   title,
   detail,
-  items
+  items,
+  action
 }: {
   tone: 'danger' | 'warn'
   title: string
   detail?: string
   items: string[]
+  action?: React.ReactNode
 }) {
   return (
     <div className="rounded-lg border border-line/50 bg-bg-panel/40 px-3 py-2.5">
@@ -608,6 +626,7 @@ function Notice({
       >
         <AlertTriangle className="size-3.5 shrink-0" />
         {title}
+        {action && <span className="ml-auto">{action}</span>}
       </div>
       {detail && <p className="mt-0.5 text-[11px] text-text-muted">{detail}</p>}
       <div className="mt-1.5 flex flex-wrap gap-1">

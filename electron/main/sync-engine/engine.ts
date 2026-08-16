@@ -333,7 +333,11 @@ async function syncTable(input: SyncTableInput): Promise<number> {
     log('info', `[${tableName}] reading column metadata`)
     const [srcCols, tgtCols] = await Promise.all([src.getColumns(tableName), tgt.getColumns(tableName)])
     if (tgtCols.length === 0) {
-      throw new Error(`Target table "${tableName}" not found or has no columns.`)
+      // The engine never creates tables on its own — the user does it explicitly
+      // from the Tables list ("Create in target"), after reviewing the DDL.
+      throw new Error(
+        `Target table "${tableName}" does not exist. Select it in the Tables list and use "Create in target" first.`
+      )
     }
     let { matched, missingInTarget, missingInSource } = intersectColumns(srcCols, tgtCols)
     if (matched.length === 0 && !addColumn) {
