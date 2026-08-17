@@ -100,7 +100,9 @@ Scope = selected rows, else all visible rows.
 - `schema:applyFixes` runs the user-checked actions on the **target only**, one by one; a failing
   action does not abort the rest. Nothing is pre-selected — the dialog is a flat
   table/column/change list with per-row checkboxes, a text filter and add/drop/type chips.
-- No `CREATE TABLE`: a table missing on the target is reported, never generated.
+- A table **gone from the source** (`missingOnSource`) yields no column rows at all — every target
+  column would otherwise read as a drop. It gets one notice line; the table list already flags it.
+- No `CREATE TABLE` here: a table missing on the target is reported and handed to the create flow.
 
 ## Conventions
 

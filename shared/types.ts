@@ -134,8 +134,10 @@ export interface ColumnDiff {
 
 export interface TableColumnDiff {
   table: string
-  /** target table does not exist at all — dbferry does not generate CREATE TABLE */
+  /** target table does not exist at all — create it explicitly before syncing */
   missingTable: boolean
+  /** table is gone from the source — reported once, never as per-column drops */
+  missingOnSource?: boolean
   error?: string
   diffs: ColumnDiff[]
 }

@@ -153,6 +153,10 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
     () => result?.tables.filter((t) => t.missingTable).map((t) => t.table) ?? [],
     [result]
   )
+  const goneFromSource = useMemo(
+    () => result?.tables.filter((t) => t.missingOnSource).map((t) => t.table) ?? [],
+    [result]
+  )
   const erroredTables = useMemo(
     () => result?.tables.filter((t) => t.error).map((t) => `${t.table}: ${t.error}`) ?? [],
     [result]
@@ -254,6 +258,7 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
     changeRows.length === 0 &&
     typeRows.length === 0 &&
     missingTables.length === 0 &&
+    goneFromSource.length === 0 &&
     erroredTables.length === 0
 
   return (
@@ -285,7 +290,8 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
           </div>
         </div>
 
-        {!loading && !error && !nothingAtAll && (
+        {/* The summary and tabs only make sense when there are column rows to show. */}
+        {!loading && !error && !nothingAtAll && changeRows.length + typeRows.length > 0 && (
           <>
             {/* One-glance summary of what this dialog is offering to do. */}
             <div className="px-6 py-3 flex items-baseline gap-x-4 gap-y-1 flex-wrap border-b border-line/40 shrink-0">
@@ -413,7 +419,10 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
             </div>
           ) : (
             <>
-              {tab === 'changes' && (missingTables.length > 0 || erroredTables.length > 0) && (
+              {tab === 'changes' &&
+                (missingTables.length > 0 ||
+                  goneFromSource.length > 0 ||
+                  erroredTables.length > 0) && (
                 <div className="px-6 pt-3 space-y-2">
                   {missingTables.length > 0 && (
                     <Notice
@@ -434,6 +443,14 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
                           </Button>
                         )
                       }
+                    />
+                  )}
+                  {goneFromSource.length > 0 && (
+                    <Notice
+                      tone="warn"
+                      title={`${goneFromSource.length} table(s) no longer exist on the source`}
+                      detail="Their columns are not listed as drops — remove the tables yourself if you want them gone."
+                      items={goneFromSource}
                     />
                   )}
                   {erroredTables.length > 0 && (

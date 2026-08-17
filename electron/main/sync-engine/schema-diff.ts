@@ -78,6 +78,12 @@ export async function diffSchema(
       }
       try {
         const [srcCols, tgtCols] = await Promise.all([src.getColumns(table), tgt.getColumns(table)])
+        if (srcCols.length === 0) {
+          // The table is gone from the source. Every target column would otherwise
+          // show up as a drop, which is noise — the table list already flags it.
+          out.push({ table, missingTable: false, missingOnSource: true, diffs: [] })
+          continue
+        }
         const { matched, missingInTarget, missingInSource } = intersectColumns(srcCols, tgtCols)
         const diffs: ColumnDiff[] = []
 
