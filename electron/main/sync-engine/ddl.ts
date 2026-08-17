@@ -176,11 +176,24 @@ function pgToMysql(t: ParsedType): string {
 export function mapColumnType(col: ColumnInfo, from: DbType, to: DbType): string {
   const t = parseType(col)
   if (!t.base) return to === 'mysql' ? 'longtext' : 'text'
+  // A PostgreSQL enum column carries only its type name, so the labels have to be
+  // re-declared explicitly on a MySQL target.
+  if (to === 'mysql' && from === 'postgres' && col.enumValues?.length) {
+    return `enum(${col.enumValues.map(mysqlLabel).join(',')})`
+  }
   if (from === to) {
     // Same driver: keep the source definition verbatim.
     return col.fullType || col.dataType
   }
   return from === 'mysql' ? mysqlToPg(t) : pgToMysql(t)
+}
+
+function mysqlLabel(value: string): string {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`
+}
+
+function pgLabel(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
 }
 
 /** MySQL cannot index a TEXT/BLOB column without a prefix length, so PKs get a bounded type. */
@@ -193,6 +206,8 @@ function pkSafeType(type: string, target: DbType): string {
 
 export interface CreateTableSql {
   sql: string
+  /** CREATE TYPE statements the table depends on — run before `sql` */
+  prelude: string[]
   /** notes worth showing to the user before they approve the DDL */
   warnings: string[]
 }
@@ -212,12 +227,33 @@ export function buildCreateTable(
     throw new Error(`Source table "${table}" has no columns`)
   }
   const warnings: string[] = []
+  const prelude: string[] = []
+  const declaredTypes = new Set<string>()
   const pkNames = sourceColumns.filter((c) => c.isPrimaryKey).map((c) => c.name)
 
   const lines = sourceColumns.map((col) => {
     const original = col.fullType || col.dataType
     let type = mapColumnType(col, from, to)
     let noted = false
+
+    // A PostgreSQL target needs the enum type to exist before the table does.
+    if (to === 'postgres' && col.enumValues?.length) {
+      const typeName = from === 'postgres' ? col.enumTypeName || col.dataType : `${table}_${col.name}`
+      if (!declaredTypes.has(typeName)) {
+        declaredTypes.add(typeName)
+        prelude.push(
+          `DO $$ BEGIN\n` +
+            `  CREATE TYPE ${identifier(typeName)} AS ENUM (${col.enumValues.map(pgLabel).join(', ')});\n` +
+            `EXCEPTION WHEN duplicate_object THEN NULL;\n` +
+            `END $$`
+        )
+        if (from !== 'postgres') {
+          warnings.push(`${col.name}: enum type ${typeName} will be created with ${col.enumValues.length} label(s)`)
+        }
+      }
+      type = identifier(typeName)
+      noted = true
+    }
     if (col.isPrimaryKey) {
       const safe = pkSafeType(type, to)
       if (safe !== type) {
@@ -245,5 +281,5 @@ export function buildCreateTable(
 
   const suffix = to === 'mysql' ? ' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4' : ''
   const sql = `CREATE TABLE ${identifier(table)} (\n${lines.join(',\n')}\n)${suffix}`
-  return { sql, warnings }
+  return { sql, prelude, warnings }
 }

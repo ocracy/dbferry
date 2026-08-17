@@ -26,6 +26,47 @@ function estimateRowBytes(row: unknown[]): number {
   return n
 }
 
+/**
+ * MySQL keeps the allowed labels inside COLUMN_TYPE, e.g. `enum('a','b''c')`.
+ * Returns undefined for anything that is not an enum/set.
+ */
+export function parseMysqlEnumValues(fullType: string | undefined): string[] | undefined {
+  if (!fullType) return undefined
+  const m = fullType.match(/^(enum|set)\s*\((.*)\)\s*$/is)
+  if (!m) return undefined
+  const body = m[2]
+  const values: string[] = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i]
+    if (inQuotes) {
+      // '' is an escaped single quote inside the label
+      if (ch === "'" && body[i + 1] === "'") {
+        current += "'"
+        i++
+      } else if (ch === '\\' && i + 1 < body.length) {
+        current += body[i + 1]
+        i++
+      } else if (ch === "'") {
+        inQuotes = false
+        values.push(current)
+        current = ''
+      } else {
+        current += ch
+      }
+    } else if (ch === "'") {
+      inQuotes = true
+    }
+  }
+  return values
+}
+
+/** Renders a label as a MySQL string literal. */
+function mysqlLiteral(value: string): string {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`
+}
+
 export class MysqlAdapter implements DbAdapter {
   private conn!: mysql.Connection
   constructor(private info: ConnectionInfo) {}
@@ -123,6 +164,39 @@ export class MysqlAdapter implements DbAdapter {
     )
   }
 
+  /**
+   * MySQL stores the labels in the column definition, so widening the set means
+   * redefining the column with the full list. Existing rows keep their value —
+   * this only ever adds labels.
+   */
+  async addEnumValues(
+    table: string,
+    column: string,
+    opts: { newValues: string[]; fullValues: string[]; nullable: boolean; base: 'enum' | 'set' }
+  ): Promise<void> {
+    // MODIFY COLUMN rewrites the whole definition, so anything not repeated here is
+    // dropped. Carry the charset, default and comment over instead of losing them.
+    const [rows] = await this.conn.query<mysql.RowDataPacket[]>(
+      `SELECT COLUMN_DEFAULT AS def, COLUMN_COMMENT AS comment,
+              CHARACTER_SET_NAME AS charset, COLLATION_NAME AS collation
+         FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+      [this.info.config.database, table, column]
+    )
+    const meta = rows[0]
+    const list = opts.fullValues.map(mysqlLiteral).join(',')
+
+    let sql = `ALTER TABLE ${this.identifier(table)} MODIFY COLUMN ${this.identifier(column)} ${opts.base}(${list})`
+    if (meta?.charset) sql += ` CHARACTER SET ${String(meta.charset)}`
+    if (meta?.collation) sql += ` COLLATE ${String(meta.collation)}`
+    sql += opts.nullable ? ' NULL' : ' NOT NULL'
+    if (meta?.def != null) sql += ` DEFAULT ${mysqlLiteral(String(meta.def))}`
+    else if (opts.nullable && meta && 'def' in meta) sql += ' DEFAULT NULL'
+    if (meta?.comment) sql += ` COMMENT ${mysqlLiteral(String(meta.comment))}`
+
+    await this.conn.query(sql)
+  }
+
   async countRows(table: string): Promise<number> {
     const [rows] = await this.conn.query<mysql.RowDataPacket[]>(
       `SELECT COUNT(*) AS c FROM ${this.identifier(table)}`
@@ -150,13 +224,17 @@ export class MysqlAdapter implements DbAdapter {
         ORDER BY ORDINAL_POSITION`,
       [this.info.config.database, table]
     )
-    return rows.map((r) => ({
-      name: String(r.name),
-      dataType: String(r.dataType),
-      fullType: r.fullType ? String(r.fullType) : undefined,
-      nullable: r.nullable === 'YES',
-      isPrimaryKey: r.keyType === 'PRI'
-    }))
+    return rows.map((r) => {
+      const fullType = r.fullType ? String(r.fullType) : undefined
+      return {
+        name: String(r.name),
+        dataType: String(r.dataType),
+        fullType,
+        nullable: r.nullable === 'YES',
+        isPrimaryKey: r.keyType === 'PRI',
+        enumValues: parseMysqlEnumValues(fullType)
+      }
+    })
   }
 
   async getMaxPk(table: string, pkColumn: string): Promise<string | number | bigint | null> {

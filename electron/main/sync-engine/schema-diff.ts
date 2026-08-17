@@ -104,9 +104,37 @@ export async function diffSchema(
             reason: col.isPrimaryKey ? 'Primary key column — drop it manually' : undefined
           })
         }
-        if (sameDriver) {
-          for (const m of matched) {
-            if (!typesDiffer(m.src, m.tgt)) continue
+        for (const m of matched) {
+          // Enum labels are comparable across drivers even when the type names are
+          // not, and a value added on the source is the case worth catching here.
+          const srcVals = m.src.enumValues
+          const tgtVals = m.tgt.enumValues
+          if (srcVals?.length && tgtVals?.length) {
+            const tgtSet = new Set(tgtVals)
+            const srcSet = new Set(srcVals)
+            const missingValues = srcVals.filter((v) => !tgtSet.has(v))
+            const extraValues = tgtVals.filter((v) => !srcSet.has(v))
+            if (missingValues.length || extraValues.length) {
+              diffs.push({
+                column: m.src.name,
+                kind: 'enum-values',
+                sourceType: typeLabel(m.src),
+                targetType: typeLabel(m.tgt),
+                missingValues,
+                extraValues,
+                // Adding labels is safe; removing one would invalidate existing rows.
+                fixable: missingValues.length > 0,
+                reason:
+                  missingValues.length === 0
+                    ? 'Only the target has extra labels — they are never removed automatically'
+                    : undefined
+              })
+            }
+            // The enum entry already describes this column — a raw type mismatch on
+            // the same column would only repeat the label list.
+            continue
+          }
+          if (sameDriver && typesDiffer(m.src, m.tgt)) {
             diffs.push({
               column: m.src.name,
               kind: 'type-mismatch',
@@ -172,7 +200,7 @@ export async function planCreateTables(
       }
       try {
         const cols = await src.getColumns(table)
-        const { sql, warnings } = buildCreateTable(
+        const { sql, prelude, warnings } = buildCreateTable(
           table,
           cols,
           project.source.type,
@@ -181,7 +209,8 @@ export async function planCreateTables(
         )
         plans.push({
           ...base,
-          sql,
+          // Show the enum types the table depends on together with the table itself.
+          sql: [...prelude, sql].join(';\n\n'),
           warnings,
           columnCount: cols.length,
           pkColumn: cols.find((c) => c.isPrimaryKey)?.name ?? null
@@ -213,13 +242,15 @@ export async function createTables(
           throw new Error('Table already exists on the target')
         }
         const cols = await src.getColumns(table)
-        const { sql } = buildCreateTable(
+        const { sql, prelude } = buildCreateTable(
           table,
           cols,
           project.source.type,
           project.target.type,
           (n) => tgt.identifier(n)
         )
+        // Enum types first — the table definition references them.
+        for (const stmt of prelude) await tgt.execute(stmt)
         await tgt.execute(sql)
         results.push({ table, ok: true })
       } catch (err) {
@@ -248,7 +279,27 @@ export async function applyColumnFixes(
 
     for (const action of actions) {
       try {
-        if (action.action === 'add') {
+        if (action.action === 'add-enum-values') {
+          const values = action.values ?? []
+          if (values.length === 0) throw new Error('No labels to add')
+          const tgtCol = (await tgt.getColumns(action.table)).find(
+            (x) => x.name.toLowerCase() === action.column.toLowerCase()
+          )
+          if (!tgtCol) throw new Error('Column no longer exists on target')
+          const existing = tgtCol.enumValues ?? []
+          if (existing.length === 0) throw new Error('Target column is not an enum')
+          // Keep the target's current order and append what is missing, so existing
+          // rows keep meaning the same thing.
+          const fullValues = [...existing, ...values.filter((v) => !existing.includes(v))]
+          // The target's own base type decides how it is redeclared (PG has no SET).
+          const base = tgtCol.dataType.toLowerCase() === 'set' ? 'set' : 'enum'
+          await tgt.addEnumValues(action.table, action.column, {
+            newValues: values,
+            fullValues,
+            nullable: tgtCol.nullable,
+            base
+          })
+        } else if (action.action === 'add') {
           if (project.source.type !== project.target.type) {
             throw new Error('Cross-driver ADD COLUMN is not supported')
           }

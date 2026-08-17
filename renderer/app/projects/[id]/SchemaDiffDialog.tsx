@@ -6,6 +6,7 @@ import {
   Columns3,
   Lock,
   Loader2,
+  ListPlus,
   Minus,
   Plus,
   RefreshCw,
@@ -31,16 +32,18 @@ interface Props {
   onCreateTables?: (tables: string[]) => void
 }
 
-/** One actionable line: a column that will be created on, or removed from, the target. */
+/** One actionable line: a column that will be created on, removed from, or widened on the target. */
 interface ChangeRow {
   key: string
   table: string
   column: string
-  action: 'add' | 'drop'
-  /** the type that will be created (add) or removed (drop) */
+  action: 'add' | 'drop' | 'enum'
+  /** the type that will be created (add) or removed (drop), or the labels to add (enum) */
   type: string
   applicable: boolean
   reason?: string
+  /** enum labels that will be added to the target */
+  values?: string[]
 }
 
 /** A column that exists on both sides with a different type — reported, never applied. */
@@ -97,7 +100,30 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
     const types: TypeRow[] = []
     for (const t of result?.tables ?? []) {
       for (const d of t.diffs) {
-        if (d.kind === 'type-mismatch') {
+        if (d.kind === 'enum-values') {
+          const missing = d.missingValues ?? []
+          if (missing.length > 0) {
+            changes.push({
+              key: `${t.table} ${d.column}`,
+              table: t.table,
+              column: d.column,
+              action: 'enum',
+              type: missing.map((v) => `'${v}'`).join(', '),
+              applicable: d.fixable,
+              reason: d.reason,
+              values: missing
+            })
+          } else {
+            // Only the target has extra labels — nothing to apply, just report it.
+            types.push({
+              key: `${t.table} ${d.column}`,
+              table: t.table,
+              column: d.column,
+              sourceType: `enum without ${(d.extraValues ?? []).map((v) => `'${v}'`).join(', ')}`,
+              targetType: `enum with ${(d.extraValues ?? []).map((v) => `'${v}'`).join(', ')}`
+            })
+          }
+        } else if (d.kind === 'type-mismatch') {
           types.push({
             key: `${t.table} ${d.column}`,
             table: t.table,
@@ -134,6 +160,7 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
 
   const addTotal = changeRows.filter((r) => r.action === 'add').length
   const dropTotal = changeRows.filter((r) => r.action === 'drop').length
+  const enumTotal = changeRows.filter((r) => r.action === 'enum').length
 
   const q = filter.trim().toLowerCase()
   const match = (table: string, column: string) =>
@@ -161,11 +188,18 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
     () =>
       changeRows
         .filter((r) => r.applicable && picked.has(r.key))
-        .map((r) => ({ table: r.table, column: r.column, action: r.action })),
+        .map((r) => ({
+          table: r.table,
+          column: r.column,
+          action:
+            r.action === 'enum' ? ('add-enum-values' as const) : (r.action as 'add' | 'drop'),
+          values: r.values
+        })),
     [changeRows, picked]
   )
   const addPicked = actions.filter((a) => a.action === 'add').length
-  const dropPicked = actions.length - addPicked
+  const dropPicked = actions.filter((a) => a.action === 'drop').length
+  const enumPicked = actions.filter((a) => a.action === 'add-enum-values').length
 
   const toggle = (k: string) =>
     setPicked((prev) => {
@@ -187,7 +221,7 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
       return next
     })
 
-  const selectAll = (only: 'add' | 'drop' | 'none') =>
+  const selectAll = (only: 'add' | 'drop' | 'enum' | 'none') =>
     setPicked(() => {
       if (only === 'none') return new Set()
       return new Set(changeRows.filter((r) => r.applicable && r.action === only).map((r) => r.key))
@@ -263,6 +297,12 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
                 <span className="text-danger font-semibold tabular-nums">{dropTotal}</span>
                 <span className="text-text-muted"> to drop</span>
               </span>
+              {enumTotal > 0 && (
+                <span className="text-[13px]">
+                  <span className="text-accent font-semibold tabular-nums">{enumTotal}</span>
+                  <span className="text-text-muted"> enum(s) missing labels</span>
+                </span>
+              )}
               {typeRows.length > 0 && (
                 <span className="text-[13px]">
                   <span className="text-warn font-semibold tabular-nums">{typeRows.length}</span>
@@ -326,6 +366,15 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
                 >
                   all {dropTotal} drops
                 </button>
+                {enumTotal > 0 && (
+                  <button
+                    onClick={() => selectAll('enum')}
+                    disabled={applying}
+                    className="text-accent hover:underline disabled:opacity-40 disabled:no-underline"
+                  >
+                    all {enumTotal} enum updates
+                  </button>
+                )}
                 {picked.size > 0 && (
                   <button
                     onClick={() => selectAll('none')}
@@ -463,7 +512,15 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
                     {addPicked} column{addPicked > 1 ? 's' : ''} will be added
                   </span>
                 )}
-                {addPicked > 0 && dropPicked > 0 && <span className="text-text-muted"> · </span>}
+                {addPicked > 0 && (dropPicked > 0 || enumPicked > 0) && (
+                  <span className="text-text-muted"> · </span>
+                )}
+                {enumPicked > 0 && (
+                  <span className="text-accent">
+                    {enumPicked} enum{enumPicked > 1 ? 's' : ''} will get the missing label(s)
+                  </span>
+                )}
+                {enumPicked > 0 && dropPicked > 0 && <span className="text-text-muted"> · </span>}
                 {dropPicked > 0 && (
                   <span className="text-danger">
                     {dropPicked} column{dropPicked > 1 ? 's' : ''} will be deleted with its data
@@ -507,18 +564,21 @@ function ChangeLine({
   disabled: boolean
 }) {
   const isAdd = row.action === 'add'
+  const isDrop = row.action === 'drop'
+  const tone = isAdd ? 'success' : isDrop ? 'danger' : 'accent'
   return (
     <li
       onClick={() => row.applicable && !disabled && onToggle()}
       className={cn(
         'flex items-center gap-3 pl-6 pr-6 py-2 border-b border-line/20',
         row.applicable ? 'cursor-pointer hover:bg-bg-panel/50' : 'opacity-60',
-        checked && (isAdd ? 'bg-success/[0.07]' : 'bg-danger/[0.07]')
+        checked &&
+          (isDrop ? 'bg-danger/[0.07]' : isAdd ? 'bg-success/[0.07]' : 'bg-accent/[0.07]')
       )}
     >
       <span className="w-4 shrink-0 grid place-items-center">
         {row.applicable ? (
-          <Check checked={checked} tone={isAdd ? 'success' : 'danger'} onClick={onToggle} />
+          <Check checked={checked} tone={tone} onClick={onToggle} />
         ) : (
           <Lock className="size-3.5 text-text-muted/60" />
         )}
@@ -530,17 +590,25 @@ function ChangeLine({
           'shrink-0 w-[76px] inline-flex items-center justify-center gap-1 rounded-md border px-1.5 py-0.5 text-[10.5px] font-semibold uppercase tracking-wider',
           isAdd
             ? 'bg-success/15 text-success border-success/30'
-            : 'bg-danger/15 text-danger border-danger/30'
+            : isDrop
+              ? 'bg-danger/15 text-danger border-danger/30'
+              : 'bg-accent/15 text-accent border-accent/30'
         )}
       >
-        {isAdd ? <Plus className="size-2.5" /> : <Minus className="size-2.5" />}
-        {isAdd ? 'add' : 'drop'}
+        {isAdd ? <Plus className="size-2.5" /> : isDrop ? <Minus className="size-2.5" /> : <ListPlus className="size-2.5" />}
+        {isAdd ? 'add' : isDrop ? 'drop' : 'enum'}
       </span>
 
       <span className="font-mono text-[12.5px] truncate min-w-0 flex-1">{row.column}</span>
 
-      <span className="font-mono text-[11px] text-text-muted truncate max-w-[240px] shrink-0">
-        {row.type}
+      <span
+        className={cn(
+          'font-mono text-[11px] truncate max-w-[240px] shrink-0',
+          row.action === 'enum' ? 'text-accent' : 'text-text-muted'
+        )}
+        title={row.action === 'enum' ? `Labels to add: ${row.type}` : row.type}
+      >
+        {row.action === 'enum' ? `+ ${row.type}` : row.type}
       </span>
 
       {/* Only rows that cannot be applied need a sentence — the pill says the rest. */}
@@ -649,7 +717,7 @@ function Check({
   onClick
 }: {
   checked: boolean
-  tone: 'success' | 'danger'
+  tone: 'success' | 'danger' | 'accent'
   onClick: () => void
 }) {
   return (
@@ -665,7 +733,9 @@ function Check({
         checked
           ? tone === 'danger'
             ? 'border-danger bg-danger'
-            : 'border-success bg-success'
+            : tone === 'accent'
+              ? 'border-accent bg-accent'
+              : 'border-success bg-success'
           : 'border-line/60 hover:border-text-muted/80'
       )}
     >

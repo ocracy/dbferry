@@ -99,6 +99,10 @@ export interface ColumnInfo {
   fullType?: string
   nullable: boolean
   isPrimaryKey: boolean
+  /** allowed labels for enum/set columns, in declaration order */
+  enumValues?: string[]
+  /** PostgreSQL only: the name of the enum type backing this column */
+  enumTypeName?: string
 }
 
 export interface TableMeta {
@@ -107,7 +111,11 @@ export interface TableMeta {
 }
 
 /** A single column-level difference between the source and the target table. */
-export type ColumnDiffKind = 'missing-in-target' | 'extra-in-target' | 'type-mismatch'
+export type ColumnDiffKind =
+  | 'missing-in-target'
+  | 'extra-in-target'
+  | 'type-mismatch'
+  | 'enum-values'
 
 export interface ColumnDiff {
   column: string
@@ -118,6 +126,10 @@ export interface ColumnDiff {
   fixable: boolean
   /** why it is not fixable (shown in the UI) */
   reason?: string
+  /** enum labels the source has and the target does not — these can be added */
+  missingValues?: string[]
+  /** enum labels only the target has — never removed automatically */
+  extraValues?: string[]
 }
 
 export interface TableColumnDiff {
@@ -141,7 +153,9 @@ export interface SchemaDiffResult {
 export interface ColumnFixAction {
   table: string
   column: string
-  action: 'add' | 'drop'
+  action: 'add' | 'drop' | 'add-enum-values'
+  /** for 'add-enum-values': the labels to add on the target */
+  values?: string[]
 }
 
 export interface ColumnFixResult extends ColumnFixAction {

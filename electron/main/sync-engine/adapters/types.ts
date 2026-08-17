@@ -32,6 +32,12 @@ export interface DbAdapter {
   execute(sql: string): Promise<void>
   addColumn(table: string, col: ColumnInfo): Promise<void>
   dropColumn(table: string, columnName: string): Promise<void>
+  /** Widens an enum column with additional labels. Never removes existing ones. */
+  addEnumValues(
+    table: string,
+    column: string,
+    opts: { newValues: string[]; fullValues: string[]; nullable: boolean; base: 'enum' | 'set' }
+  ): Promise<void>
   getColumns(table: string): Promise<ColumnInfo[]>
   getMaxPk(table: string, pkColumn: string): Promise<string | number | bigint | null>
   streamRows(table: string, opts: StreamRowsOpts): AsyncIterable<unknown[][]>

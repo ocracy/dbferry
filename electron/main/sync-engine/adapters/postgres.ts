@@ -48,6 +48,11 @@ function buildPgFullType(row: {
   return dt
 }
 
+/** Renders a label as a PostgreSQL string literal. */
+export function pgLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
 function pgEscapeCopyText(s: string): string {
   let out = ''
   for (let i = 0; i < s.length; i++) {
@@ -150,6 +155,28 @@ export class PostgresAdapter implements DbAdapter {
     )
   }
 
+  /**
+   * PostgreSQL keeps the labels on the type, not the column, so the values are
+   * appended to the enum type itself. ADD VALUE cannot run inside a transaction
+   * block, which is why schema fixes are applied outside one.
+   */
+  async addEnumValues(
+    table: string,
+    column: string,
+    opts: { newValues: string[] }
+  ): Promise<void> {
+    const cols = await this.getColumns(table)
+    const col = cols.find((c) => c.name.toLowerCase() === column.toLowerCase())
+    if (!col?.enumTypeName) {
+      throw new Error(`Column "${column}" is not backed by an enum type on the target`)
+    }
+    for (const value of opts.newValues) {
+      await this.client.query(
+        `ALTER TYPE ${this.identifier(col.enumTypeName)} ADD VALUE IF NOT EXISTS ${pgLiteral(value)}`
+      )
+    }
+  }
+
   async countRows(table: string): Promise<number> {
     const r = await this.client.query<{ c: string }>(
       `SELECT COUNT(*)::text AS c FROM ${this.identifier(table)}`
@@ -201,13 +228,45 @@ export class PostgresAdapter implements DbAdapter {
         ORDER BY c.ordinal_position`,
       [table]
     )
-    return r.rows.map((row) => ({
-      name: row.name,
-      dataType: row.data_type,
-      fullType: buildPgFullType(row),
-      nullable: row.is_nullable === 'YES',
-      isPrimaryKey: row.is_pk === true
-    }))
+    // Enum labels do not live in information_schema — a column only points at its
+    // type, so adding a value to the type is invisible without this lookup.
+    const enumTypes = r.rows.some((row) => row.data_type === 'USER-DEFINED' || row.data_type === 'ARRAY')
+      ? await this.enumLabels(r.rows.map((row) => row.udt_name.replace(/^_/, '')))
+      : new Map<string, string[]>()
+
+    return r.rows.map((row) => {
+      const typeName = row.udt_name.replace(/^_/, '')
+      const labels = enumTypes.get(typeName)
+      return {
+        name: row.name,
+        dataType: row.data_type,
+        fullType: buildPgFullType(row),
+        nullable: row.is_nullable === 'YES',
+        isPrimaryKey: row.is_pk === true,
+        enumValues: labels,
+        enumTypeName: labels ? typeName : undefined
+      }
+    })
+  }
+
+  /** Labels of the given enum types, keyed by type name, in declaration order. */
+  private async enumLabels(typeNames: string[]): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>()
+    if (typeNames.length === 0) return out
+    const r = await this.client.query<{ typname: string; enumlabel: string }>(
+      `SELECT t.typname, e.enumlabel
+         FROM pg_type t
+         JOIN pg_enum e ON e.enumtypid = t.oid
+        WHERE t.typname = ANY($1::text[])
+        ORDER BY t.typname, e.enumsortorder`,
+      [Array.from(new Set(typeNames))]
+    )
+    for (const row of r.rows) {
+      const list = out.get(row.typname)
+      if (list) list.push(row.enumlabel)
+      else out.set(row.typname, [row.enumlabel])
+    }
+    return out
   }
 
   async getMaxPk(table: string, pkColumn: string): Promise<string | number | bigint | null> {

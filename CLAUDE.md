@@ -82,7 +82,17 @@ Path aliases: `@shared/*` → `shared/*`, `@/*` → `renderer/*`, `@main/*` → 
 Scope = selected rows, else all visible rows.
 
 - `schema:diff` → `diffSchema()` reads `getColumns()` on both sides per table and reports
-  `missing-in-target` (add), `extra-in-target` (drop), `type-mismatch` (info only).
+  `missing-in-target` (add), `extra-in-target` (drop), `enum-values` (add labels),
+  `type-mismatch` (info only).
+- **Enum labels** are compared whenever both sides have them, **including cross-driver** — the
+  label set is comparable even when the type names are not. MySQL carries them in `COLUMN_TYPE`
+  (parsed by `parseMysqlEnumValues`); PostgreSQL does not expose them in `information_schema` at
+  all, so `PostgresAdapter.enumLabels` joins `pg_type`/`pg_enum` — without it, `ALTER TYPE … ADD
+  VALUE` on the source is invisible. A column with an enum diff never also emits a
+  `type-mismatch`, which would just repeat the label list.
+- Adding labels is applicable (`ALTER TYPE … ADD VALUE IF NOT EXISTS` on PG, `MODIFY COLUMN` with
+  the widened list on MySQL, carrying charset/default/comment over); labels only the target has
+  are reported but never removed.
 - Type comparison only runs when source and target share a driver — `varchar(255)` vs
   `character varying(255)` would otherwise flag every column.
 - Fixable: add only same-driver (no cross-driver type translation); drop always, except PK columns.
@@ -125,6 +135,9 @@ user's back — schema writes are always an explicit, reviewed step.
   `mysqlToPg` / `pgToMysql` (`tinyint(1)`↔`boolean`, `datetime`↔`timestamp`, `json`↔`jsonb`,
   `uuid`→`char(36)`, arrays→`json`, unsigned widening, …). A text/blob primary key is narrowed to
   `varchar(255)` because MySQL cannot index it otherwise.
+- Enum columns get a real enum on the target: a PG target receives a `CREATE TYPE … AS ENUM`
+  prelude (idempotent via `DO $$ … EXCEPTION WHEN duplicate_object`), a MySQL target gets the
+  labels re-declared inline. `planCreateTables` shows the prelude together with the table.
 - Generated tables carry columns, nullability and the primary key — nothing else. Add new type
   rules in `ddl.ts`, next to the value rules in `type-mapper.ts`.
 

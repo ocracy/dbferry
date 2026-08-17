@@ -1,0 +1,5 @@
+# Claude Studio — machine-specific files are not versioned.
+runs/
+sessions.json
+settings.json
+*.log
