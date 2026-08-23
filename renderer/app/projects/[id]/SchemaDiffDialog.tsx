@@ -4,14 +4,10 @@ import {
   ArrowRight,
   CheckCircle2,
   Columns3,
-  Lock,
   Loader2,
-  ListPlus,
-  Minus,
-  Plus,
+  Lock,
   RefreshCw,
   Search,
-  Table2,
   TableProperties,
   X
 } from 'lucide-react'
@@ -32,30 +28,26 @@ interface Props {
   onCreateTables?: (tables: string[]) => void
 }
 
-/** One actionable line: a column that will be created on, removed from, or widened on the target. */
-interface ChangeRow {
+type Tab = 'drop' | 'create' | 'alter'
+
+/** One line of one tab. `values` is set for enum widenings. */
+interface Row {
   key: string
+  tab: Tab
   table: string
   column: string
-  action: 'add' | 'drop' | 'enum'
-  /** the type that will be created (add) or removed (drop), or the labels to add (enum) */
-  type: string
+  /** the type being removed / created, or the change being made */
+  detail: string
   applicable: boolean
   reason?: string
-  /** enum labels that will be added to the target */
   values?: string[]
 }
 
-/** A column that exists on both sides with a different type — reported, never applied. */
-interface TypeRow {
-  key: string
-  table: string
-  column: string
-  sourceType: string
-  targetType: string
-}
-
-type Tab = 'changes' | 'types'
+const TABS: Array<{ id: Tab; label: string }> = [
+  { id: 'drop', label: 'Drop' },
+  { id: 'create', label: 'Create' },
+  { id: 'alter', label: 'Alter' }
+]
 
 export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreateTables }: Props) {
   const [result, setResult] = useState<SchemaDiffResult | null>(null)
@@ -64,7 +56,7 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
   const [error, setError] = useState<string | null>(null)
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [filter, setFilter] = useState('')
-  const [tab, setTab] = useState<Tab>('changes')
+  const [tab, setTab] = useState<Tab>('drop')
 
   const load = async () => {
     setLoading(true)
@@ -74,6 +66,18 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
       setResult(r)
       // Nothing is pre-selected — only what the user ticks is applied.
       setPicked(new Set())
+      // Open on a tab that actually has something in it.
+      const has = (kinds: string[]) =>
+        r.tables.some((t) => t.diffs.some((d) => kinds.includes(d.kind)))
+      setTab(
+        has(['extra-in-target'])
+          ? 'drop'
+          : has(['missing-in-target'])
+            ? 'create'
+            : has(['enum-values', 'type-mismatch'])
+              ? 'alter'
+              : 'drop'
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setResult(null)
@@ -95,58 +99,60 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose, applying])
 
-  const { changeRows, typeRows } = useMemo(() => {
-    const changes: ChangeRow[] = []
-    const types: TypeRow[] = []
+  const rows = useMemo<Row[]>(() => {
+    const out: Row[] = []
     for (const t of result?.tables ?? []) {
       for (const d of t.diffs) {
-        if (d.kind === 'enum-values') {
-          const missing = d.missingValues ?? []
-          if (missing.length > 0) {
-            changes.push({
-              key: `${t.table} ${d.column}`,
-              table: t.table,
-              column: d.column,
-              action: 'enum',
-              type: missing.map((v) => `'${v}'`).join(', '),
-              applicable: d.fixable,
-              reason: d.reason,
-              values: missing
-            })
-          } else {
-            // Only the target has extra labels — nothing to apply, just report it.
-            types.push({
-              key: `${t.table} ${d.column}`,
-              table: t.table,
-              column: d.column,
-              sourceType: `enum without ${(d.extraValues ?? []).map((v) => `'${v}'`).join(', ')}`,
-              targetType: `enum with ${(d.extraValues ?? []).map((v) => `'${v}'`).join(', ')}`
-            })
-          }
-        } else if (d.kind === 'type-mismatch') {
-          types.push({
-            key: `${t.table} ${d.column}`,
+        const key = `${t.table} ${d.column} ${d.kind}`
+        if (d.kind === 'missing-in-target') {
+          out.push({
+            key,
+            tab: 'create',
             table: t.table,
             column: d.column,
-            sourceType: d.sourceType ?? '—',
-            targetType: d.targetType ?? '—'
+            detail: d.sourceType ?? '—',
+            applicable: d.fixable,
+            reason: d.reason
+          })
+        } else if (d.kind === 'extra-in-target') {
+          out.push({
+            key,
+            tab: 'drop',
+            table: t.table,
+            column: d.column,
+            detail: d.targetType ?? '—',
+            applicable: d.fixable,
+            reason: d.reason
+          })
+        } else if (d.kind === 'enum-values') {
+          const missing = d.missingValues ?? []
+          out.push({
+            key,
+            tab: 'alter',
+            table: t.table,
+            column: d.column,
+            detail:
+              missing.length > 0
+                ? `add ${missing.map((v) => `'${v}'`).join(', ')}`
+                : `target has extra ${(d.extraValues ?? []).map((v) => `'${v}'`).join(', ')}`,
+            applicable: d.fixable,
+            reason: d.reason,
+            values: missing
           })
         } else {
-          const add = d.kind === 'missing-in-target'
-          changes.push({
-            key: `${t.table} ${d.column}`,
+          out.push({
+            key,
+            tab: 'alter',
             table: t.table,
             column: d.column,
-            action: add ? 'add' : 'drop',
-            // Show the type that is actually involved: what gets created, or what gets removed.
-            type: (add ? d.sourceType : d.targetType) ?? '—',
-            applicable: d.fixable,
+            detail: `${d.targetType ?? '—'} → ${d.sourceType ?? '—'}`,
+            applicable: false,
             reason: d.reason
           })
         }
       }
     }
-    return { changeRows: changes, typeRows: types }
+    return out.sort((a, b) => a.table.localeCompare(b.table) || a.column.localeCompare(b.column))
   }, [result])
 
   const missingTables = useMemo(
@@ -162,48 +168,35 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
     [result]
   )
 
-  const addTotal = changeRows.filter((r) => r.action === 'add').length
-  const dropTotal = changeRows.filter((r) => r.action === 'drop').length
-  const enumTotal = changeRows.filter((r) => r.action === 'enum').length
+  const countFor = (id: Tab) => rows.filter((r) => r.tab === id).length
 
   const q = filter.trim().toLowerCase()
-  const match = (table: string, column: string) =>
-    !q || table.toLowerCase().includes(q) || column.toLowerCase().includes(q)
-
-  /** Rows of the active tab, grouped by table, so the table name is printed once. */
-  const groups = useMemo(() => {
-    const rows: Array<ChangeRow | TypeRow> =
-      tab === 'changes'
-        ? changeRows.filter((r) => match(r.table, r.column))
-        : typeRows.filter((r) => match(r.table, r.column))
-    const byTable = new Map<string, Array<ChangeRow | TypeRow>>()
-    for (const r of rows) {
-      const list = byTable.get(r.table)
-      if (list) list.push(r)
-      else byTable.set(r.table, [r])
-    }
-    return Array.from(byTable, ([table, items]) => ({ table, items })).sort((a, b) =>
-      a.table.localeCompare(b.table)
-    )
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, changeRows, typeRows, q])
+  const visible = rows.filter(
+    (r) =>
+      r.tab === tab &&
+      (!q || r.table.toLowerCase().includes(q) || r.column.toLowerCase().includes(q))
+  )
+  const selectable = visible.filter((r) => r.applicable)
+  const allSelected = selectable.length > 0 && selectable.every((r) => picked.has(r.key))
 
   const actions = useMemo<ColumnFixAction[]>(
     () =>
-      changeRows
+      rows
         .filter((r) => r.applicable && picked.has(r.key))
         .map((r) => ({
           table: r.table,
           column: r.column,
           action:
-            r.action === 'enum' ? ('add-enum-values' as const) : (r.action as 'add' | 'drop'),
+            r.tab === 'create'
+              ? ('add' as const)
+              : r.tab === 'drop'
+                ? ('drop' as const)
+                : ('add-enum-values' as const),
           values: r.values
         })),
-    [changeRows, picked]
+    [rows, picked]
   )
-  const addPicked = actions.filter((a) => a.action === 'add').length
   const dropPicked = actions.filter((a) => a.action === 'drop').length
-  const enumPicked = actions.filter((a) => a.action === 'add-enum-values').length
 
   const toggle = (k: string) =>
     setPicked((prev) => {
@@ -213,22 +206,14 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
       return next
     })
 
-  const toggleTable = (table: string) =>
+  const toggleAll = () =>
     setPicked((prev) => {
-      const rows = changeRows.filter((r) => r.table === table && r.applicable)
-      const allOn = rows.length > 0 && rows.every((r) => picked.has(r.key))
       const next = new Set(prev)
-      for (const r of rows) {
-        if (allOn) next.delete(r.key)
+      for (const r of selectable) {
+        if (allSelected) next.delete(r.key)
         else next.add(r.key)
       }
       return next
-    })
-
-  const selectAll = (only: 'add' | 'drop' | 'enum' | 'none') =>
-    setPicked(() => {
-      if (only === 'none') return new Set()
-      return new Set(changeRows.filter((r) => r.applicable && r.action === only).map((r) => r.key))
     })
 
   const apply = async () => {
@@ -238,7 +223,7 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
       const results = await api.schema.applyFixes(project.id, actions)
       const failed = results.filter((r) => !r.ok)
       if (failed.length === 0) {
-        toast.success(`${results.length} column change(s) applied to target`)
+        toast.success(`${results.length} change(s) applied to target`)
       } else {
         toast.error(
           `${failed.length}/${results.length} failed · ${failed[0].table}.${failed[0].column}: ${failed[0].error}`
@@ -255,15 +240,14 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
 
   const nothingAtAll =
     !!result &&
-    changeRows.length === 0 &&
-    typeRows.length === 0 &&
+    rows.length === 0 &&
     missingTables.length === 0 &&
     goneFromSource.length === 0 &&
     erroredTables.length === 0
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-bg/60 backdrop-blur-sm">
-      <div className="glass rounded-2xl w-[860px] max-w-[95vw] h-[78vh] flex flex-col shadow-2xl overflow-hidden">
+      <div className="glass rounded-2xl w-[820px] max-w-[95vw] h-[76vh] flex flex-col shadow-2xl overflow-hidden">
         <div className="px-6 py-4 flex items-center gap-3 border-b border-line/40 shrink-0">
           <Columns3 className="size-4 text-accent shrink-0" />
           <div className="min-w-0">
@@ -272,7 +256,7 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
               <span className="font-mono">{project.source.database}</span>
               <ArrowRight className="inline size-3 mx-1 -mt-px" />
               <span className="font-mono">{project.target.database}</span>
-              {result && <span className="ml-2">· {result.scannedTables} table(s) scanned</span>}
+              {result && <span className="ml-2">· {result.scannedTables} table(s)</span>}
             </p>
           </div>
           <div className="ml-auto flex items-center gap-2 shrink-0">
@@ -290,112 +274,39 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
           </div>
         </div>
 
-        {/* The summary and tabs only make sense when there are column rows to show. */}
-        {!loading && !error && !nothingAtAll && changeRows.length + typeRows.length > 0 && (
-          <>
-            {/* One-glance summary of what this dialog is offering to do. */}
-            <div className="px-6 py-3 flex items-baseline gap-x-4 gap-y-1 flex-wrap border-b border-line/40 shrink-0">
-              <span className="text-[13px]">
-                <span className="text-success font-semibold tabular-nums">{addTotal}</span>
-                <span className="text-text-muted"> column(s) to add</span>
-              </span>
-              <span className="text-[13px]">
-                <span className="text-danger font-semibold tabular-nums">{dropTotal}</span>
-                <span className="text-text-muted"> to drop</span>
-              </span>
-              {enumTotal > 0 && (
-                <span className="text-[13px]">
-                  <span className="text-accent font-semibold tabular-nums">{enumTotal}</span>
-                  <span className="text-text-muted"> enum(s) missing labels</span>
-                </span>
-              )}
-              {typeRows.length > 0 && (
-                <span className="text-[13px]">
-                  <span className="text-warn font-semibold tabular-nums">{typeRows.length}</span>
-                  <span className="text-text-muted"> type difference(s)</span>
-                </span>
-              )}
-              <span className="text-[11px] text-text-muted ml-auto">
-                across{' '}
-                {new Set([...changeRows, ...typeRows].map((r) => r.table)).size} table(s)
-              </span>
-            </div>
-
-            <div className="px-6 py-2.5 flex items-center gap-2 border-b border-line/40 shrink-0">
-              <Tab
-                label="Changes to apply"
-                count={changeRows.length}
-                active={tab === 'changes'}
-                onClick={() => setTab('changes')}
+        {!loading && !error && !nothingAtAll && (
+          <div className="px-6 pt-3 flex items-center gap-1.5 shrink-0">
+            {TABS.map((t) => (
+              <TabButton
+                key={t.id}
+                label={t.label}
+                count={countFor(t.id)}
+                tone={t.id}
+                active={tab === t.id}
+                onClick={() => setTab(t.id)}
               />
-              {typeRows.length > 0 && (
-                <Tab
-                  label="Type differences"
-                  count={typeRows.length}
-                  active={tab === 'types'}
-                  onClick={() => setTab('types')}
-                />
+            ))}
+            <div className="relative ml-auto w-48">
+              <Search className="size-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
+              <Input
+                className="h-8 pl-8 pr-7"
+                placeholder="Filter…"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+              />
+              {filter && (
+                <button
+                  onClick={() => setFilter('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
+                >
+                  <X className="size-3.5" />
+                </button>
               )}
-              <div className="relative ml-auto w-52">
-                <Search className="size-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
-                <Input
-                  className="h-8 pl-8 pr-7"
-                  placeholder="Filter…"
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                />
-                {filter && (
-                  <button
-                    onClick={() => setFilter('')}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
-                  >
-                    <X className="size-3.5" />
-                  </button>
-                )}
-              </div>
             </div>
-
-            {tab === 'changes' && changeRows.length > 0 && (
-              <div className="px-6 py-2 flex items-center gap-3 text-[11px] border-b border-line/40 shrink-0">
-                <span className="text-text-muted">Quick select</span>
-                <button
-                  onClick={() => selectAll('add')}
-                  disabled={applying || addTotal === 0}
-                  className="text-success hover:underline disabled:opacity-40 disabled:no-underline"
-                >
-                  all {addTotal} additions
-                </button>
-                <button
-                  onClick={() => selectAll('drop')}
-                  disabled={applying || dropTotal === 0}
-                  className="text-danger hover:underline disabled:opacity-40 disabled:no-underline"
-                >
-                  all {dropTotal} drops
-                </button>
-                {enumTotal > 0 && (
-                  <button
-                    onClick={() => selectAll('enum')}
-                    disabled={applying}
-                    className="text-accent hover:underline disabled:opacity-40 disabled:no-underline"
-                  >
-                    all {enumTotal} enum updates
-                  </button>
-                )}
-                {picked.size > 0 && (
-                  <button
-                    onClick={() => selectAll('none')}
-                    disabled={applying}
-                    className="text-text-muted hover:text-text ml-1"
-                  >
-                    clear
-                  </button>
-                )}
-              </div>
-            )}
-          </>
+          </div>
         )}
 
-        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden mt-3">
           {loading ? (
             <div className="h-full grid place-items-center gap-3 text-text-muted text-sm">
               <Loader2 className="size-5 animate-spin text-accent" />
@@ -419,100 +330,65 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
             </div>
           ) : (
             <>
-              {tab === 'changes' &&
-                (missingTables.length > 0 ||
-                  goneFromSource.length > 0 ||
-                  erroredTables.length > 0) && (
-                <div className="px-6 pt-3 space-y-2">
-                  {missingTables.length > 0 && (
-                    <Notice
-                      tone="danger"
-                      title={`${missingTables.length} table(s) do not exist on the target`}
-                      detail="They cannot sync until they exist. Review the CREATE TABLE and create them."
-                      items={missingTables}
-                      action={
-                        onCreateTables && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="border-danger/40 text-danger hover:bg-danger/10"
-                            onClick={() => onCreateTables(missingTables)}
-                          >
-                            <TableProperties className="size-3.5" />
-                            Create {missingTables.length} in target
-                          </Button>
-                        )
-                      }
-                    />
-                  )}
-                  {goneFromSource.length > 0 && (
-                    <Notice
-                      tone="warn"
-                      title={`${goneFromSource.length} table(s) no longer exist on the source`}
-                      detail="Their columns are not listed as drops — remove the tables yourself if you want them gone."
-                      items={goneFromSource}
-                    />
-                  )}
-                  {erroredTables.length > 0 && (
-                    <Notice
-                      tone="warn"
-                      title={`${erroredTables.length} table(s) could not be read`}
-                      items={erroredTables}
-                    />
-                  )}
-                </div>
+              {/* Table-level facts belong to the tab they explain. */}
+              {tab === 'create' && missingTables.length > 0 && (
+                <Notice
+                  title={`${missingTables.length} table(s) do not exist on the target`}
+                  items={missingTables}
+                  action={
+                    onCreateTables && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-danger/40 text-danger hover:bg-danger/10"
+                        onClick={() => onCreateTables(missingTables)}
+                      >
+                        <TableProperties className="size-3.5" />
+                        Create in target
+                      </Button>
+                    )
+                  }
+                />
+              )}
+              {tab === 'drop' && goneFromSource.length > 0 && (
+                <Notice
+                  title={`${goneFromSource.length} table(s) no longer exist on the source`}
+                  detail="Their columns are not listed here — drop the tables yourself if you want them gone."
+                  items={goneFromSource}
+                />
+              )}
+              {erroredTables.length > 0 && (
+                <Notice
+                  title={`${erroredTables.length} table(s) could not be read`}
+                  items={erroredTables}
+                />
               )}
 
-              {groups.length === 0 ? (
+              {selectable.length > 0 && (
+                <label className="flex items-center gap-3 px-6 py-2 border-y border-line/30 cursor-pointer select-none">
+                  <Check checked={allSelected} tone={tab} onClick={toggleAll} />
+                  <span className="text-[11.5px] text-text-muted">
+                    Select all {selectable.length}
+                  </span>
+                </label>
+              )}
+
+              {visible.length === 0 ? (
                 <div className="py-16 text-center text-text-muted text-sm">
-                  {tab === 'changes'
-                    ? filter
-                      ? 'No changes match this filter'
-                      : 'No columns to add or drop'
-                    : 'No type differences match this filter'}
+                  {filter ? 'Nothing matches this filter' : emptyLabel(tab)}
                 </div>
               ) : (
-                <div className="pb-3">
-                  {groups.map((g) => {
-                    const applicable = changeRows.filter((r) => r.table === g.table && r.applicable)
-                    const allOn = applicable.length > 0 && applicable.every((r) => picked.has(r.key))
-                    return (
-                      <div key={g.table}>
-                        <div className="sticky top-0 z-10 flex items-center gap-2 px-6 py-2 bg-bg-panel/95 backdrop-blur border-y border-line/40">
-                          <Table2 className="size-3.5 text-text-muted shrink-0" />
-                          <span className="font-mono text-[12.5px] truncate">{g.table}</span>
-                          <span className="text-[11px] text-text-muted shrink-0">
-                            {g.items.length} {tab === 'changes' ? 'change(s)' : 'difference(s)'}
-                          </span>
-                          {tab === 'changes' && applicable.length > 0 && (
-                            <button
-                              onClick={() => toggleTable(g.table)}
-                              disabled={applying}
-                              className="ml-auto text-[11px] text-accent hover:underline shrink-0"
-                            >
-                              {allOn ? 'deselect table' : 'select table'}
-                            </button>
-                          )}
-                        </div>
-                        <ul>
-                          {g.items.map((r) =>
-                            tab === 'changes' ? (
-                              <ChangeLine
-                                key={r.key}
-                                row={r as ChangeRow}
-                                checked={picked.has(r.key)}
-                                onToggle={() => toggle(r.key)}
-                                disabled={applying}
-                              />
-                            ) : (
-                              <TypeLine key={r.key} row={r as TypeRow} />
-                            )
-                          )}
-                        </ul>
-                      </div>
-                    )
-                  })}
-                </div>
+                <ul>
+                  {visible.map((r) => (
+                    <Line
+                      key={r.key}
+                      row={r}
+                      checked={picked.has(r.key)}
+                      onToggle={() => toggle(r.key)}
+                      disabled={applying}
+                    />
+                  ))}
+                </ul>
               )}
             </>
           )}
@@ -524,24 +400,9 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
               <span className="text-text-muted">Nothing selected</span>
             ) : (
               <>
-                {addPicked > 0 && (
-                  <span className="text-success">
-                    {addPicked} column{addPicked > 1 ? 's' : ''} will be added
-                  </span>
-                )}
-                {addPicked > 0 && (dropPicked > 0 || enumPicked > 0) && (
-                  <span className="text-text-muted"> · </span>
-                )}
-                {enumPicked > 0 && (
-                  <span className="text-accent">
-                    {enumPicked} enum{enumPicked > 1 ? 's' : ''} will get the missing label(s)
-                  </span>
-                )}
-                {enumPicked > 0 && dropPicked > 0 && <span className="text-text-muted"> · </span>}
+                <span className="text-text">{actions.length} selected</span>
                 {dropPicked > 0 && (
-                  <span className="text-danger">
-                    {dropPicked} column{dropPicked > 1 ? 's' : ''} will be deleted with its data
-                  </span>
+                  <span className="text-danger"> · {dropPicked} will be deleted with its data</span>
                 )}
               </>
             )}
@@ -556,11 +417,7 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
               disabled={actions.length === 0 || applying || loading}
             >
               {applying && <Loader2 className="size-4 animate-spin" />}
-              {applying
-                ? 'Applying…'
-                : actions.length === 0
-                  ? 'Apply on target'
-                  : `Apply ${actions.length} on target`}
+              {applying ? 'Applying…' : `Apply${actions.length ? ` ${actions.length}` : ''}`}
             </Button>
           </div>
         </div>
@@ -569,68 +426,48 @@ export function SchemaDiffDialog({ project, tables, onClose, onApplied, onCreate
   )
 }
 
-function ChangeLine({
+function emptyLabel(tab: Tab): string {
+  if (tab === 'drop') return 'No columns to drop — the target has nothing extra'
+  if (tab === 'create') return 'No columns to create — the target has everything the source has'
+  return 'No type or enum changes'
+}
+
+function Line({
   row,
   checked,
   onToggle,
   disabled
 }: {
-  row: ChangeRow
+  row: Row
   checked: boolean
   onToggle: () => void
   disabled: boolean
 }) {
-  const isAdd = row.action === 'add'
-  const isDrop = row.action === 'drop'
-  const tone = isAdd ? 'success' : isDrop ? 'danger' : 'accent'
   return (
     <li
       onClick={() => row.applicable && !disabled && onToggle()}
       className={cn(
-        'flex items-center gap-3 pl-6 pr-6 py-2 border-b border-line/20',
+        'flex items-center gap-3 px-6 py-2 border-b border-line/20',
         row.applicable ? 'cursor-pointer hover:bg-bg-panel/50' : 'opacity-60',
-        checked &&
-          (isDrop ? 'bg-danger/[0.07]' : isAdd ? 'bg-success/[0.07]' : 'bg-accent/[0.07]')
+        checked && (row.tab === 'drop' ? 'bg-danger/[0.07]' : row.tab === 'create' ? 'bg-success/[0.07]' : 'bg-accent/[0.07]')
       )}
     >
       <span className="w-4 shrink-0 grid place-items-center">
         {row.applicable ? (
-          <Check checked={checked} tone={tone} onClick={onToggle} />
+          <Check checked={checked} tone={row.tab} onClick={onToggle} />
         ) : (
           <Lock className="size-3.5 text-text-muted/60" />
         )}
       </span>
-
-      {/* Action first — it is the thing to understand at a glance. */}
-      <span
-        className={cn(
-          'shrink-0 w-[76px] inline-flex items-center justify-center gap-1 rounded-md border px-1.5 py-0.5 text-[10.5px] font-semibold uppercase tracking-wider',
-          isAdd
-            ? 'bg-success/15 text-success border-success/30'
-            : isDrop
-              ? 'bg-danger/15 text-danger border-danger/30'
-              : 'bg-accent/15 text-accent border-accent/30'
-        )}
-      >
-        {isAdd ? <Plus className="size-2.5" /> : isDrop ? <Minus className="size-2.5" /> : <ListPlus className="size-2.5" />}
-        {isAdd ? 'add' : isDrop ? 'drop' : 'enum'}
+      <span className="font-mono text-[12.5px] truncate min-w-0 flex-1">
+        <span className="text-text-muted">{row.table}.</span>
+        {row.column}
       </span>
-
-      <span className="font-mono text-[12.5px] truncate min-w-0 flex-1">{row.column}</span>
-
-      <span
-        className={cn(
-          'font-mono text-[11px] truncate max-w-[240px] shrink-0',
-          row.action === 'enum' ? 'text-accent' : 'text-text-muted'
-        )}
-        title={row.action === 'enum' ? `Labels to add: ${row.type}` : row.type}
-      >
-        {row.action === 'enum' ? `+ ${row.type}` : row.type}
+      <span className="font-mono text-[11px] text-text-muted truncate max-w-[280px] shrink-0">
+        {row.detail}
       </span>
-
-      {/* Only rows that cannot be applied need a sentence — the pill says the rest. */}
-      {!row.applicable && (
-        <span className="text-[11px] text-warn shrink-0 max-w-[260px] truncate" title={row.reason}>
+      {!row.applicable && row.reason && (
+        <span className="text-[11px] text-warn truncate max-w-[220px] shrink-0" title={row.reason}>
           {row.reason}
         </span>
       )}
@@ -638,50 +475,35 @@ function ChangeLine({
   )
 }
 
-function TypeLine({ row }: { row: TypeRow }) {
-  return (
-    <li className="flex items-center gap-3 pl-6 pr-6 py-2 border-b border-line/20">
-      <span className="font-mono text-[12.5px] truncate min-w-0 flex-1">{row.column}</span>
-      <span className="font-mono text-[11px] shrink-0 inline-flex items-center gap-2">
-        <span className="text-text-muted">target</span>
-        <span className="text-warn">{row.targetType}</span>
-        <ArrowRight className="size-3 text-text-muted/60" />
-        <span className="text-text-muted">source</span>
-        <span className="text-text">{row.sourceType}</span>
-      </span>
-      <span className="text-[11px] text-text-muted shrink-0 w-[150px] text-right">
-        change it manually
-      </span>
-    </li>
-  )
-}
-
-function Tab({
+function TabButton({
   label,
   count,
+  tone,
   active,
   onClick
 }: {
   label: string
   count: number
+  tone: Tab
   active: boolean
   onClick: () => void
 }) {
+  const activeColor =
+    tone === 'drop'
+      ? 'bg-danger/15 text-danger'
+      : tone === 'create'
+        ? 'bg-success/15 text-success'
+        : 'bg-accent/15 text-accent'
   return (
     <button
       onClick={onClick}
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-lg px-2.5 h-8 text-[12px] font-medium transition-colors',
-        active ? 'bg-accent/15 text-accent' : 'text-text-muted hover:text-text'
+        'inline-flex items-center gap-1.5 rounded-lg px-3 h-8 text-[12.5px] font-medium transition-colors',
+        active ? activeColor : 'text-text-muted hover:text-text'
       )}
     >
       {label}
-      <span
-        className={cn(
-          'tabular-nums rounded px-1 text-[10.5px]',
-          active ? 'bg-accent/20' : 'bg-bg-panel'
-        )}
-      >
+      <span className={cn('tabular-nums rounded px-1 text-[10.5px]', active ? 'bg-black/20' : 'bg-bg-panel')}>
         {count}
       </span>
     </button>
@@ -689,26 +511,19 @@ function Tab({
 }
 
 function Notice({
-  tone,
   title,
   detail,
   items,
   action
 }: {
-  tone: 'danger' | 'warn'
   title: string
   detail?: string
   items: string[]
   action?: React.ReactNode
 }) {
   return (
-    <div className="rounded-lg border border-line/50 bg-bg-panel/40 px-3 py-2.5">
-      <div
-        className={cn(
-          'flex items-center gap-1.5 text-[11.5px] font-medium',
-          tone === 'danger' ? 'text-danger' : 'text-warn'
-        )}
-      >
+    <div className="mx-6 mb-3 rounded-lg border border-line/50 bg-bg-panel/40 px-3 py-2.5">
+      <div className="flex items-center gap-1.5 text-[11.5px] font-medium text-warn">
         <AlertTriangle className="size-3.5 shrink-0" />
         {title}
         {action && <span className="ml-auto">{action}</span>}
@@ -734,9 +549,15 @@ function Check({
   onClick
 }: {
   checked: boolean
-  tone: 'success' | 'danger' | 'accent'
+  tone: Tab
   onClick: () => void
 }) {
+  const on =
+    tone === 'drop'
+      ? 'border-danger bg-danger'
+      : tone === 'create'
+        ? 'border-success bg-success'
+        : 'border-accent bg-accent'
   return (
     <button
       onClick={(e) => {
@@ -747,13 +568,7 @@ function Check({
       role="checkbox"
       className={cn(
         'block size-4 rounded border-2 transition-all grid place-items-center',
-        checked
-          ? tone === 'danger'
-            ? 'border-danger bg-danger'
-            : tone === 'accent'
-              ? 'border-accent bg-accent'
-              : 'border-success bg-success'
-          : 'border-line/60 hover:border-text-muted/80'
+        checked ? on : 'border-line/60 hover:border-text-muted/80'
       )}
     >
       {checked && (

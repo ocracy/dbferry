@@ -98,8 +98,12 @@ Scope = selected rows, else all visible rows.
 - Fixable: add only same-driver (no cross-driver type translation); drop always, except PK columns.
   Type mismatches are never auto-fixed — `ALTER TYPE` can lose data.
 - `schema:applyFixes` runs the user-checked actions on the **target only**, one by one; a failing
-  action does not abort the rest. Nothing is pre-selected — the dialog is a flat
-  table/column/change list with per-row checkboxes, a text filter and add/drop/type chips.
+  action does not abort the rest. Nothing is pre-selected.
+- The dialog is three tabs — **Drop | Create | Alter** — each a plain checkbox list of
+  `table.column` + the type involved, with select-all and a text filter. Selections survive tab
+  switches; Apply runs everything ticked. It opens on the first non-empty tab. Table-level notices
+  sit in the tab they explain (missing target tables under Create, source-deleted tables under
+  Drop).
 - A table **gone from the source** (`missingOnSource`) yields no column rows at all — every target
   column would otherwise read as a drop. It gets one notice line; the table list already flags it.
 - No `CREATE TABLE` here: a table missing on the target is reported and handed to the create flow.
